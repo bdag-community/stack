@@ -1,0 +1,507 @@
+name: Publish authenticated BlockDAG stack release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful dev-release Actions run ID"
+        required: true
+        type: number
+      source_artifact_id:
+        description: "Exact signed publication Actions artifact ID"
+        required: true
+        type: number
+      source_artifact_sha256:
+        description: "Lowercase SHA-256 of the exact Actions artifact archive"
+        required: true
+        type: string
+      version:
+        description: "Immutable precreated release tag"
+        required: true
+        type: string
+      release_sequence:
+        description: "Exact globally monotonic release sequence"
+        required: true
+        type: number
+      stack_sha:
+        description: "Exact 40-character stack commit SHA"
+        required: true
+        type: string
+      canary_evidence_sha256:
+        description: "SHA-256 of the reviewed v25 and Thinkminer canary evidence"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: community-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    environment: community-release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout publisher at immutable stack SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.stack_sha }}
+          fetch-depth: 1
+
+      - name: Authenticate source run and publish exact release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_KEY_SHA256: ${{ vars.RELEASE_LOCK_PUBLIC_KEY_SHA256 }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_ARTIFACT_ID: ${{ inputs.source_artifact_id }}
+          SOURCE_ARTIFACT_SHA256: ${{ inputs.source_artifact_sha256 }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SEQUENCE: ${{ inputs.release_sequence }}
+          STACK_SHA: ${{ inputs.stack_sha }}
+          CANARY_EVIDENCE_SHA256: ${{ inputs.canary_evidence_sha256 }}
+          PACKAGE_NAME: pool-stack-docker
+          RELEASE_CHANNEL: qualification
+          SOURCE_WORKFLOW_PATH: .github/workflows/dev-release.yml
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+
+          fail() {
+            printf '::error::%s\n' "$*" >&2
+            exit 1
+          }
+
+          github_api() {
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$@"
+          }
+
+          github_download_artifact() {
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${SOURCE_ARTIFACT_ID}/zip"
+          }
+
+          github_upload_asset() {
+            local asset_name="$1" asset_path="$2" encoded_name response upload_url
+            encoded_name="$(jq -rn --arg value "$asset_name" '$value | @uri')"
+            upload_url="https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${encoded_name}"
+            response="$(curl --disable --fail-with-body --silent --show-error \
+              --proto '=https' \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/octet-stream' \
+              -H "@${upload_auth_header}" \
+              --request POST \
+              --data-binary "@${asset_path}" \
+              "$upload_url")"
+            jq -e \
+              --arg name "$asset_name" \
+              --argjson size "$(stat -c '%s' -- "$asset_path")" \
+              --arg digest "sha256:$(sha256sum -- "$asset_path" | cut -d' ' -f1)" '
+                .name == $name and .size == $size and .digest == $digest and
+                .state == "uploaded" and (.id | type) == "number" and .id > 0
+              ' <<<"$response" >/dev/null || fail "uploaded release asset response mismatch"
+          }
+
+          assert_source_run() {
+            local called_workflow_path expected_ref workflow_id workflow_json
+            called_workflow_path="${GITHUB_REPOSITORY}/.github/workflows/build.yml@${STACK_SHA}"
+            expected_ref="refs/tags/${RELEASE_VERSION}"
+            source_run_json="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+            jq -e \
+              --argjson id "$SOURCE_RUN_ID" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg sha "$STACK_SHA" \
+              --arg path "$SOURCE_WORKFLOW_PATH" \
+              --arg called_path "$called_workflow_path" \
+              --arg expected_ref "$expected_ref" '
+                .id == $id and .event == "workflow_dispatch" and
+                .status == "completed" and .conclusion == "success" and
+                .head_sha == $sha and .path == $path and
+                .repository.full_name == $repository and
+                (.run_attempt | type) == "number" and .run_attempt > 0 and
+                (.workflow_id | type) == "number" and .workflow_id > 0 and
+                .referenced_workflows == [
+                  {path: $called_path, ref: $expected_ref, sha: $sha}
+                ]
+              ' <<<"$source_run_json" >/dev/null ||
+              fail "source run or called workflow is missing, unsuccessful, or has the wrong identity"
+            source_run_attempt="$(jq -er '.run_attempt' <<<"$source_run_json")"
+            workflow_id="$(jq -er '.workflow_id' <<<"$source_run_json")"
+            workflow_json="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}")"
+            jq -e --argjson id "$workflow_id" --arg path "$SOURCE_WORKFLOW_PATH" '
+              .id == $id and .path == $path and .state == "active"
+            ' <<<"$workflow_json" >/dev/null || fail "source workflow identity is invalid"
+            artifact_name="release-publication-${RELEASE_VERSION}-${SOURCE_RUN_ID}-${source_run_attempt}"
+          }
+
+          assert_source_artifact() {
+            local artifact_page matches
+            artifact_page="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100")"
+            jq -e '.total_count == (.artifacts | length)' <<<"$artifact_page" >/dev/null ||
+              fail "source run artifact inventory exceeds one fail-closed API page"
+            matches="$(jq -c \
+              --arg name "$artifact_name" --argjson id "$SOURCE_ARTIFACT_ID" '
+                [.artifacts[] | select(.name == $name or .id == $id)]
+              ' <<<"$artifact_page")"
+            [[ "$(jq -r 'length' <<<"$matches")" == 1 ]] ||
+              fail "source publication artifact name or ID is not unique"
+            source_artifact_json="$(jq -c '.[0]' <<<"$matches")"
+            jq -e \
+              --arg name "$artifact_name" \
+              --argjson id "$SOURCE_ARTIFACT_ID" \
+              --arg digest "sha256:$SOURCE_ARTIFACT_SHA256" \
+              --arg raw_digest "$SOURCE_ARTIFACT_SHA256" \
+              --argjson run_id "$SOURCE_RUN_ID" \
+              --arg sha "$STACK_SHA" '
+                .id == $id and .name == $name and .expired == false and
+                (.digest == null or .digest == $digest or .digest == $raw_digest) and
+                (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and
+                (.workflow_run == null or
+                  (.workflow_run.id == $run_id and .workflow_run.head_sha == $sha))
+              ' <<<"$source_artifact_json" >/dev/null ||
+              fail "source publication artifact identity, digest, or lifetime is invalid"
+            source_artifact_size="$(jq -er '.size_in_bytes' <<<"$source_artifact_json")"
+          }
+
+          list_exact_tag_refs() {
+            github_api --paginate \
+              "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${RELEASE_VERSION}?per_page=100" |
+              jq -cs --arg ref "refs/tags/${RELEASE_VERSION}" \
+                '(add // []) | map(select(.ref == $ref))'
+          }
+
+          resolve_tag_commit() {
+            local depth object_sha object_type ref_json tag_json tag_refs
+            local -A seen=()
+            tag_refs="$(list_exact_tag_refs)"
+            [[ "$(jq -r 'length' <<<"$tag_refs")" == 1 ]] ||
+              fail "immutable release tag is absent or ambiguous"
+            ref_json="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}")"
+            [[ "$(jq -er '.ref' <<<"$ref_json")" == "refs/tags/${RELEASE_VERSION}" ]] ||
+              fail "release tag reference identity changed"
+            object_type="$(jq -er '.object.type' <<<"$ref_json")"
+            object_sha="$(jq -er '.object.sha' <<<"$ref_json")"
+            depth=0
+            while [[ "$object_type" == tag ]]; do
+              (( depth < 16 )) || fail "annotated Git tag chain exceeds the safety limit"
+              [[ "$object_sha" =~ ^[0-9a-f]{40}$ ]] ||
+                fail "annotated Git tag has an invalid object SHA"
+              [[ -z "${seen[$object_sha]:-}" ]] ||
+                fail "annotated Git tag chain contains a cycle"
+              seen["$object_sha"]=1
+              tag_json="$(github_api \
+                "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+              [[ "$(jq -er '.sha' <<<"$tag_json")" == "$object_sha" ]] ||
+                fail "annotated Git tag object identity changed"
+              object_type="$(jq -er '.object.type' <<<"$tag_json")"
+              object_sha="$(jq -er '.object.sha' <<<"$tag_json")"
+              depth=$((depth + 1))
+            done
+            [[ "$object_type" == commit ]] || fail "release tag does not peel to a commit"
+            printf '%s\n' "$object_sha"
+          }
+
+          assert_tag_target() {
+            local resolved
+            resolved="$(resolve_tag_commit)"
+            [[ "$resolved" == "$STACK_SHA" ]] ||
+              fail "release tag resolves to $resolved instead of stack SHA $STACK_SHA"
+          }
+
+          list_matching_releases() {
+            github_api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" |
+              jq -cs --arg tag "$RELEASE_VERSION" \
+                '(add // []) | map(select(.tag_name == $tag))'
+          }
+
+          assert_release_identity() {
+            local expected_draft="$1" release_json="$2"
+            jq -e \
+              --arg tag "$RELEASE_VERSION" \
+              --arg sha "$STACK_SHA" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson draft "$expected_draft" \
+              --rawfile body "$release_body" '
+                (.id | type) == "number" and .id > 0 and
+                .tag_name == $tag and .target_commitish == $sha and
+                .name == $tag and .body == $body and .draft == $draft and
+                .prerelease == true and
+                .upload_url == ("https://uploads.github.com/repos/" + $repository +
+                  "/releases/" + (.id | tostring) + "/assets{?name,label}") and
+                (if $draft then .published_at == null
+                 else ((.published_at | type) == "string" and (.published_at | length) > 0)
+                 end)
+              ' <<<"$release_json" >/dev/null ||
+              fail "release identity or publication state does not match authenticated inputs"
+          }
+
+          list_release_assets() {
+            github_api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" |
+              jq -cs '(add // [])'
+          }
+
+          assert_resumable_asset_subset() {
+            local remote_assets="$1"
+            jq -e --slurpfile expected "$expected_assets_file" '
+              . as $remote | $expected[0] as $wanted |
+              all($remote[];
+                ((.id | type) == "number") and .id > 0 and
+                ((.name | type) == "string") and
+                ((.size | type) == "number") and .size > 0 and
+                ((.digest | type) == "string") and
+                (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                .state == "uploaded") and
+              (($remote | group_by(.name)) | all(.[]; length == 1)) and
+              all($remote[]; . as $asset | any($wanted[];
+                .name == $asset.name and .size == $asset.size and
+                .digest == $asset.digest))
+            ' <<<"$remote_assets" >/dev/null ||
+              fail "draft contains an extra, duplicate, unsupported, or mismatched asset"
+          }
+
+          assert_exact_asset_inventory() {
+            local remote_assets="$1"
+            jq -e --slurpfile expected "$expected_assets_file" '
+              . as $remote | $expected[0] as $wanted |
+              all($remote[];
+                ((.id | type) == "number") and .id > 0 and
+                ((.name | type) == "string") and
+                ((.size | type) == "number") and .size > 0 and
+                ((.digest | type) == "string") and
+                (.digest | test("^sha256:[0-9a-f]{64}$")) and
+                .state == "uploaded") and
+              (($remote | group_by(.name)) | all(.[]; length == 1)) and
+              (($remote | map({name, size, digest}) | sort_by(.name)) ==
+               ($wanted | sort_by(.name)))
+            ' <<<"$remote_assets" >/dev/null ||
+              fail "remote release asset inventory is not exactly authenticated"
+          }
+
+          verify_release() {
+            local expected_draft="$1" current_release remote_assets
+            current_release="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            assert_release_identity "$expected_draft" "$current_release"
+            assert_tag_target
+            remote_assets="$(list_release_assets)"
+            assert_exact_asset_inventory "$remote_assets"
+          }
+
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "source_run_id is invalid"
+          [[ "$SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || fail "source_artifact_id is invalid"
+          [[ "$SOURCE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+            fail "source_artifact_sha256 must be a lowercase 64-hex digest"
+          [[ "$CANARY_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+            fail "canary_evidence_sha256 must be a nonempty lowercase 64-hex digest"
+          [[ "$RELEASE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]] ||
+            fail "release version is invalid"
+          [[ "$RELEASE_SEQUENCE" =~ ^[1-9][0-9]*$ ]] || fail "release sequence is invalid"
+          [[ "$STACK_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "stack SHA is invalid"
+          [[ "$EXPECTED_RELEASE_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+            fail "operator-controlled release key fingerprint is invalid"
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            fail "GitHub repository identity is invalid"
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] ||
+            fail "publisher must run from a workflow_dispatch event"
+          [[ "$GITHUB_SHA" == "$STACK_SHA" ]] ||
+            fail "publisher workflow SHA differs from requested stack SHA"
+          [[ "$GITHUB_WORKFLOW_SHA" == "$STACK_SHA" ]] ||
+            fail "publisher workflow definition SHA differs from requested stack SHA"
+          [[ "$GITHUB_REF" == "refs/tags/$RELEASE_VERSION" ]] ||
+            fail "publisher must be dispatched from the immutable release tag"
+          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == "$RELEASE_VERSION" ]] ||
+            fail "publisher GitHub ref identity is not the immutable release tag"
+          [[ "$GITHUB_WORKFLOW_REF" == \
+            "${GITHUB_REPOSITORY}/.github/workflows/publish-release.yml@refs/tags/${RELEASE_VERSION}" ]] ||
+            fail "publisher workflow ref is not the exact tag-bound publisher"
+
+          upload_auth_header="${RUNNER_TEMP}/github-upload-auth-header"
+          python3 - "$upload_auth_header" <<'PY'
+          import os
+          import sys
+
+          path = sys.argv[1]
+          token = os.environ["GH_TOKEN"]
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+          if hasattr(os, "O_NOFOLLOW"):
+              flags |= os.O_NOFOLLOW
+          descriptor = os.open(path, flags, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              handle.write(f"Authorization: Bearer {token}\n")
+              handle.flush()
+              os.fsync(handle.fileno())
+          PY
+          [[ -f "$upload_auth_header" && ! -L "$upload_auth_header" ]] ||
+            fail "private GitHub upload authorization header is unsafe"
+          [[ "$(stat -c '%a' -- "$upload_auth_header")" == 600 ]] ||
+            fail "private GitHub upload authorization header has unsafe permissions"
+          trap 'rm -f -- "$upload_auth_header"' EXIT
+
+          assert_source_run
+          assert_source_artifact
+          assert_tag_target
+
+          artifact_archive="${RUNNER_TEMP}/source-publication-artifact.zip"
+          verified_root="${RUNNER_TEMP}/verified-publication-artifact"
+          verification_report="${RUNNER_TEMP}/publication-verification.json"
+          test ! -e "$artifact_archive"
+          test ! -e "$verified_root"
+          github_download_artifact >"$artifact_archive"
+          [[ -f "$artifact_archive" && ! -L "$artifact_archive" ]] ||
+            fail "downloaded Actions artifact is not a regular file"
+          [[ "$(stat -c '%s' -- "$artifact_archive")" == "$source_artifact_size" ]] ||
+            fail "downloaded Actions artifact size differs from API metadata"
+          [[ "$(sha256sum -- "$artifact_archive" | cut -d' ' -f1)" == "$SOURCE_ARTIFACT_SHA256" ]] ||
+            fail "downloaded Actions artifact digest differs from authenticated input"
+
+          python3 scripts/release_publication_attestation.py verify-artifact \
+            --archive "$artifact_archive" \
+            --output-dir "$verified_root" \
+            --version "$RELEASE_VERSION" \
+            --sequence "$RELEASE_SEQUENCE" \
+            --channel "$RELEASE_CHANNEL" \
+            --package-name "$PACKAGE_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-path "$SOURCE_WORKFLOW_PATH" \
+            --event workflow_dispatch \
+            --head-sha "$STACK_SHA" \
+            --run-id "$SOURCE_RUN_ID" \
+            --run-attempt "$source_run_attempt" \
+            --artifact-name "$artifact_name" \
+            --release-key-sha256 "$EXPECTED_RELEASE_KEY_SHA256" \
+            >"$verification_report"
+
+          expected_assets_file="${RUNNER_TEMP}/release-expected-assets.json"
+          jq -e '
+            .release_assets | length == 8 and
+            (group_by(.name) | all(.[]; length == 1))
+          ' "$verification_report" >/dev/null || fail "verified release asset report is invalid"
+          jq -c '[.release_assets[] |
+            {name: .name, size: .size_bytes, digest: ("sha256:" + .sha256)}] |
+            sort_by(.name)' "$verification_report" >"$expected_assets_file"
+          attestation_sha256="$(jq -er '.attestation_sha256' "$verification_report")"
+
+          release_body="${RUNNER_TEMP}/release-body.md"
+          python3 - "$verified_root/release-notes.md" "$release_body" \
+            "$SOURCE_RUN_ID" "$source_run_attempt" "$SOURCE_ARTIFACT_ID" \
+            "$SOURCE_ARTIFACT_SHA256" "$attestation_sha256" \
+            "$CANARY_EVIDENCE_SHA256" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          notes_path, output_path, run_id, run_attempt, artifact_id, artifact_sha, attestation_sha, canary_sha = sys.argv[1:]
+          notes = Path(notes_path).read_text(encoding="utf-8")
+          if not notes.endswith("\n"):
+              raise SystemExit("signed release notes must end with a newline")
+          body = notes + (
+              "\nAuthenticated publication provenance:\n"
+              f"- Source Actions run: {run_id}, attempt {run_attempt}\n"
+              f"- Source Actions artifact ID: {artifact_id}\n"
+              f"- Source Actions artifact SHA-256: {artifact_sha}\n"
+              f"- Signed publication attestation SHA-256: {attestation_sha}\n"
+              f"- Reviewed canary evidence SHA-256: {canary_sha}\n"
+          )
+          descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              handle.write(body)
+              handle.flush()
+              os.fsync(handle.fileno())
+          PY
+
+          declare -A asset_path_by_name=()
+          while IFS= read -r name; do
+            [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,255}$ ]] ||
+              fail "authenticated release asset name is invalid"
+            asset_path_by_name["$name"]="$verified_root/$name"
+          done < <(jq -r '.[].name' "$expected_assets_file")
+          [[ "${#asset_path_by_name[@]}" == 8 ]] || fail "authenticated asset map is not exact"
+
+          release_matches="$(list_matching_releases)"
+          release_count="$(jq -r 'length' <<<"$release_matches")"
+          (( release_count <= 1 )) || fail "multiple releases use the requested tag"
+          if (( release_count == 1 )); then
+            release_json="$(jq -c '.[0]' <<<"$release_matches")"
+            assert_release_identity true "$release_json"
+          else
+            assert_source_run
+            assert_source_artifact
+            assert_tag_target
+            release_request="${RUNNER_TEMP}/release-create.json"
+            jq -n \
+              --arg tag "$RELEASE_VERSION" \
+              --arg sha "$STACK_SHA" \
+              --rawfile body "$release_body" '
+                {
+                  tag_name: $tag,
+                  target_commitish: $sha,
+                  name: $tag,
+                  body: $body,
+                  draft: true,
+                  prerelease: true,
+                  make_latest: "false"
+                }
+              ' >"$release_request"
+            release_json="$(github_api --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases" --input "$release_request")"
+            assert_release_identity true "$release_json"
+          fi
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' \
+            <<<"$release_json")"
+
+          current_release="$(github_api \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+          assert_release_identity true "$current_release"
+          assert_tag_target
+          remote_assets="$(list_release_assets)"
+          assert_resumable_asset_subset "$remote_assets"
+          mapfile -t missing_assets < <(
+            jq -r --slurpfile expected "$expected_assets_file" '
+              . as $remote | $expected[0][] as $wanted |
+              select(any($remote[]; .name == $wanted.name) | not) |
+              $wanted.name
+            ' <<<"$remote_assets"
+          )
+          for name in "${missing_assets[@]}"; do
+            assert_source_run
+            assert_source_artifact
+            current_release="$(github_api \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            assert_release_identity true "$current_release"
+            assert_tag_target
+            remote_assets="$(list_release_assets)"
+            assert_resumable_asset_subset "$remote_assets"
+            github_upload_asset "$name" "${asset_path_by_name[$name]}"
+          done
+
+          assert_source_run
+          assert_source_artifact
+          verify_release true
+          publish_request="${RUNNER_TEMP}/release-publish.json"
+          printf '%s\n' '{"draft":false}' >"$publish_request"
+          published_release="$(github_api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            --input "$publish_request")"
+          assert_release_identity false "$published_release"
+          assert_source_run
+          assert_source_artifact
+          verify_release false
+          printf 'Published authenticated release %s from source run %s attempt %s with canary evidence %s.\n' \
+            "$RELEASE_VERSION" "$SOURCE_RUN_ID" "$source_run_attempt" \
+            "$CANARY_EVIDENCE_SHA256"

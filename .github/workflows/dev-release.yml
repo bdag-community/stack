@@ -1,0 +1,467 @@
+name: dev-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Develop prerelease tag, e.g. stack-dev-v1.2.3-rc.1"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.26.x"
+  GOFLAGS: "-buildvcs=false"
+  PACKAGE_NAME: "pool-stack-docker"
+  RELEASE_CHANNEL: "develop"
+  COMPONENT_REF: "develop"
+  TARGET_RELEASE_REPO: "BlockdagEngineering/bdag-stack-releases"
+
+jobs:
+  validate-dev-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate dev release inputs
+        id: version
+        shell: bash
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "branch" || "${GITHUB_REF_NAME}" != "develop" ]]; then
+            echo "::error::dev-release must be run manually from the develop branch."
+            exit 1
+          fi
+          if [[ ! "${VERSION}" =~ ^stack-dev-v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "::error::version must match stack-dev-vX.Y.Z-rc.N, for example stack-dev-v1.2.3-rc.1"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag ${VERSION} already exists; dev releases are immutable. Use the next rc number."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags "https://github.com/${TARGET_RELEASE_REPO}.git" "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag ${VERSION} already exists in ${TARGET_RELEASE_REPO}; dev releases are immutable. Use the next rc number."
+            exit 1
+          fi
+          if command -v gh >/dev/null 2>&1 && gh release view "${VERSION}" --repo "${TARGET_RELEASE_REPO}" >/dev/null 2>&1; then
+            echo "::error::release ${VERSION} already exists; dev releases are immutable. Use the next rc number."
+            exit 1
+          fi
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build-and-package:
+    runs-on: ubuntu-latest
+    needs: validate-dev-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goarch: amd64
+            cc: gcc
+            docker_platform: linux/amd64
+          - target: linux-arm64
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            docker_platform: linux/arm64
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout private blockdag repo
+        uses: actions/checkout@v4
+        with:
+          repository: BlockdagEngineering/blockdag-corechain
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/blockdag-node
+          ref: develop
+
+      - name: Checkout private mining pool repo
+        uses: actions/checkout@v4
+        with:
+          repository: BlockdagEngineering/pool
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/pool
+          ref: develop
+
+      - name: Checkout dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: BlockdagEngineering/redis-dash
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/dashboard
+          ref: develop
+
+      - name: Checkout node-only dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: BlockdagEngineering/node-dashboard
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/node-dashboard
+          ref: develop
+
+      - name: Verify upstream checkouts
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_repo() {
+            local name="$1"
+            shift
+            for path in "$@"; do
+              if [[ -f "$path" ]]; then
+                echo "ok: $name ($path)"
+                return 0
+              fi
+            done
+            echo "::error::Upstream checkout '$name' missing expected files: $*"
+            return 1
+          }
+          verify_develop_checkout() {
+            local name="$1" path="$2" branch head develop_head
+            head="$(git -C "$path" rev-parse HEAD)"
+            branch="$(git -C "$path" rev-parse --abbrev-ref HEAD)"
+            develop_head="$(
+              git -C "$path" rev-parse refs/remotes/origin/develop 2>/dev/null \
+                || git -C "$path" rev-parse refs/heads/develop 2>/dev/null
+            )"
+            if [[ -z "$develop_head" || "$head" != "$develop_head" ]]; then
+              echo "::error::Upstream checkout '$name' is not the develop head."
+              return 1
+            fi
+            echo "ok: $name develop ${head:0:12} (${branch})"
+          }
+          verify_repo blockdag-corechain src/blockdag-node/cmd/bdag/bdag.go
+          verify_repo pool src/pool/cmd/pool/main.go
+          verify_repo redis-dash src/dashboard/main.go
+          verify_repo node-dashboard src/node-dashboard/main.go
+          verify_develop_checkout blockdag-corechain src/blockdag-node
+          verify_develop_checkout pool src/pool
+          verify_develop_checkout redis-dash src/dashboard
+          verify_develop_checkout node-dashboard src/node-dashboard
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install packaging and cross-build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(zip rsync)
+          if [[ "${{ matrix.target }}" == "linux-arm64" ]]; then
+            packages+=(gcc-aarch64-linux-gnu libc6-dev-arm64-cross)
+          fi
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+
+      - name: Build blockdag-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/blockdag-node
+          common_env=(
+            GOOS=linux
+            GOARCH=${{ matrix.goarch }}
+            CGO_ENABLED=1
+            CC=${{ matrix.cc }}
+            GOFLAGS=-buildvcs=false
+          )
+          env "${common_env[@]}" make bdag nodeworker
+          mkdir -p ../../bin
+          cp -f ./build/bin/bdag ../../bin/blockdag-node
+          cp -f ./build/bin/nodeworker ../../bin/nodeworker
+
+      - name: Build mining-pool
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/pool
+          common_env=(
+            GOOS=linux
+            GOARCH=${{ matrix.goarch }}
+            CGO_ENABLED=1
+            CC=${{ matrix.cc }}
+            GOFLAGS=-buildvcs=false
+          )
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool ./cmd/pool
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/dashboard-api ./cmd/dashboard-api
+          # poolworker is pure stdlib; build it without cgo so it stays static.
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o build/bin/poolworker ./cmd/poolworker
+          cp -f ./build/bin/pool ../../bin/mining-pool
+          cp -f ./build/bin/dashboard-api ../../bin/dashboard-api
+          cp -f ./build/bin/poolworker ../../bin/poolworker
+
+      - name: Build dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/dashboard
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o ../../bin/dashboard .
+
+      - name: Build node-only dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/node-dashboard
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o ../../bin/node-dashboard .
+
+      - name: Ensure executables
+        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard
+
+      - name: Verify release architecture
+        shell: bash
+        run: |
+          scripts/verify-release-architecture.py --target "${{ matrix.target }}" \
+            bin/blockdag-node \
+            bin/nodeworker \
+            bin/mining-pool \
+            bin/poolworker \
+            bin/dashboard-api \
+            bin/dashboard \
+            bin/node-dashboard
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
+
+      - name: Validate compose
+        shell: bash
+        env:
+          BDAG_STACK_HOST_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -f .env.example
+          docker compose --env-file .env.example config | grep -q 'dockerfile: dockerfile' || \
+            { echo "::error::Compose must resolve dockerfile for pool tarball env"; exit 1; }
+
+      - name: Create runtime payload zip
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-dev-release.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          ROOT="${PACKAGE_NAME}-${VERSION}-${TARGET}"
+          OUT="${ROOT}.zip"
+          OUT_SHA256="${OUT}.sha256"
+          PROVENANCE="release-provenance-${TARGET}.json"
+
+          test -f .env.example || { echo "::error::Missing .env.example"; exit 1; }
+
+          cat > release-payload.env <<EOF
+          BDAG_RELEASE_CHANNEL=develop
+          BDAG_RELEASE_VERSION=${VERSION}
+          BDAG_STACK_RELEASE_TAG=${VERSION}
+          BDAG_RELEASE_PAYLOAD_TARGET=${TARGET}
+          BDAG_RELEASE_PAYLOAD_ARCH=${{ matrix.goarch }}
+          DOCKER_PLATFORM=${{ matrix.docker_platform }}
+          EOF
+
+          python3 - "${VERSION}" "${TARGET}" "${PROVENANCE}" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          version, target, output = sys.argv[1:4]
+          repos = {
+              "stack": ".",
+              "blockdag-corechain": "src/blockdag-node",
+              "pool": "src/pool",
+              "redis-dash": "src/dashboard",
+              "node-dashboard": "src/node-dashboard",
+          }
+
+          def git(path, *args):
+              return subprocess.check_output(["git", "-C", path, *args], text=True).strip()
+
+          sources = {}
+          for name, path in repos.items():
+              sources[name] = {
+                  "path": path,
+                  "ref": "develop",
+                  "head": git(path, "rev-parse", "HEAD"),
+                  "remote": git(path, "config", "--get", "remote.origin.url"),
+                  "dirty": bool(git(path, "status", "--porcelain")),
+              }
+
+          manifest = {
+              "release_channel": "develop",
+              "release_version": version,
+              "target": target,
+              "generated_at_unix": int(time.time()),
+              "github": {
+                  "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+                  "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
+                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                  "sha": os.environ.get("GITHUB_SHA", ""),
+                  "ref": os.environ.get("GITHUB_REF", ""),
+              },
+              "sources": sources,
+          }
+          Path(output).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+          rm -rf "${ROOT}" "${OUT}" "${OUT_SHA256}"
+          mkdir "${ROOT}"
+          cp docker-compose.yml dockerfile .dockerignore .env.example node.conf.example README.md checksums.txt release-payload.env "${ROOT}/"
+          cp "${PROVENANCE}" "${ROOT}/release-provenance.json"
+          echo "${VERSION}" > "${ROOT}/version.txt"
+          cp -a bin sql docker tools "${ROOT}/"
+
+          rsync -a --exclude='__pycache__/' --exclude='*.pyc' scripts "${ROOT}/"
+          rsync -a --exclude='runtime/' --exclude='runtime-*/' --exclude='__pycache__/' --exclude='*.pyc' ops "${ROOT}/"
+
+          zip -qr "${OUT}" "${ROOT}"
+          python3 scripts/check-release-archive.py "${OUT}"
+          sha256sum "${OUT}" > "${OUT_SHA256}"
+          rm -rf "${ROOT}"
+
+          ls -lh "${OUT}" "${PROVENANCE}"
+          SZ="$(stat -c%s "${OUT}")"
+          MAX=$((2 * 1024 * 1024 * 1024 - 256 * 1024 * 1024))
+          if [ "${SZ}" -gt "${MAX}" ]; then
+            echo "::error::Zip ${SZ} bytes exceeds safe GitHub limit (~2GiB cap minus headroom)"
+            exit 1
+          fi
+          echo "artifact=${OUT}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${OUT_SHA256}" >> "$GITHUB_OUTPUT"
+          echo "provenance=${PROVENANCE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.sha256 }}
+            ${{ steps.package.outputs.provenance }}
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - validate-dev-release
+      - build-and-package
+    env:
+      GH_TOKEN: ${{ secrets.BDAG_STACK_RELEASES_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Re-check release tag is unused
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-dev-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags "https://github.com/${TARGET_RELEASE_REPO}.git" "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag ${VERSION} already exists in ${TARGET_RELEASE_REPO}; dev releases are immutable. Use the next rc number."
+            exit 1
+          fi
+          if command -v gh >/dev/null 2>&1 && gh release view "${VERSION}" --repo "${TARGET_RELEASE_REPO}" >/dev/null 2>&1; then
+            echo "::error::release ${VERSION} already exists in ${TARGET_RELEASE_REPO}; dev releases are immutable. Use the next rc number."
+            exit 1
+          fi
+
+      - name: Ensure target release repo has a main branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::Set BDAG_STACK_RELEASES_TOKEN or PRIVATE_REPO_TOKEN to a PAT with Contents: Read and write on ${TARGET_RELEASE_REPO}."
+            exit 1
+          fi
+
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${TARGET_RELEASE_REPO}.git"
+          if git ls-remote --exit-code --heads "${remote}" main >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+          git init -b main "${workdir}"
+          cd "${workdir}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cat > README.md <<EOF
+          # bdag-stack-releases
+
+          Public release distribution for BlockDAG stack payloads and the bdagrig CLI.
+          EOF
+          git add README.md
+          git commit -m "Initialize release repository"
+          git remote add origin "${remote}"
+          git push origin main
+
+      - name: Download payload artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-dev-release.outputs.version }}"
+          echo "${VERSION}" > release-assets/version.txt
+          cat > release-assets/release-notes.md <<EOF
+          Develop prerelease built from the develop branch of the stack and component repositories.
+
+          Version: ${VERSION}
+          Channel: develop
+
+          These archives are consumed by the public bdagrig CLI, which manages
+          release cutover, dataset selection, and stack startup.
+
+          Component source SHAs are attached as release-provenance-*.json and included in each payload zip as release-provenance.json.
+          EOF
+          ls -lh release-assets
+
+      - name: Upload release assets folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ needs.validate-dev-release.outputs.version }}
+          path: release-assets/
+          if-no-files-found: error
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.TARGET_RELEASE_REPO }}
+          token: ${{ env.GH_TOKEN }}
+          tag_name: ${{ needs.validate-dev-release.outputs.version }}
+          target_commitish: main
+          name: ${{ needs.validate-dev-release.outputs.version }}
+          body_path: release-assets/release-notes.md
+          files: |
+            release-assets/pool-stack-docker-*.zip
+            release-assets/pool-stack-docker-*.zip.sha256
+            release-assets/release-provenance-*.json
+            release-assets/version.txt
+          draft: false
+          prerelease: true
+          make_latest: false

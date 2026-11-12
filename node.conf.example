@@ -1,0 +1,79 @@
+# BlockDAG node configuration for the Docker Compose stack.
+
+# P2P listen
+listen=0.0.0.0
+port=8150
+p2ptcpport=8150
+# Leave externalip unset by default. Set BDAG_P2P_ADVERTISE_IP only when this
+# host has a reachable public/static address or correct port forwarding.
+
+# BDAG RPC listen
+rpclisten=0.0.0.0:38131
+
+# EVM RPC listen
+evm.http.addr=0.0.0.0
+evm.http.port=18545
+evm.ws.addr=0.0.0.0
+evm.ws.port=18546
+
+
+# Bootstrap peers (mainnet seed nodes). Add one addpeer=... line per complete
+# BDAG P2P multiaddr. Keep only public peers that are currently reachable.
+#RPC node:
+addpeer=/ip4/63.182.36.180/tcp/8150/p2p/16Uiu2HAmP8HsTF9ks8JjFamzT9JBZb3ymSiCJ8rkzXBZqYj4yKtP
+#Public pool:
+addpeer=/ip4/16.28.133.168/tcp/8150/p2p/16Uiu2HAkxpxVrAkCYMkWHzr2UjLdF1JazEhMzpuqgCxiuXUwMhyj
+
+#Remote node:
+addpeer=/ip4/10.147.18.55/tcp/8150/p2p/16Uiu2HAkwG85xVYV9QzKzSnVeKct4XfQFWbJbvxsoDU3Dde7ZyrM
+
+addpeer=/ip4/3.126.64.13/tcp/8152/p2p/16Uiu2HAmEFxRaBbbf3sRi43CCvMk5Y6zPkuGY9s4uRK2FKJVJkqo
+addpeer=/ip4/16.28.133.168/tcp/8150/p2p/16Uiu2HAm9UcTayJDSajjJYsWwVaN2qqGeczcs9kXse3dMdvGDRjz
+addpeer=/ip4/13.57.132.47/tcp/8150/p2p/16Uiu2HAmDynYpWjWmgVGf9qVWvDdLnJ3ybVgDmFexizR4zMereus
+addpeer=/ip4/102.182.77.21/tcp/8150/p2p/16Uiu2HAm2uPLqM1dfd3ddbzg3FDAmvuvyo3vbBSXpVHurqAsUxWQ
+addpeer=/ip4/102.182.77.16/tcp/8150/p2p/16Uiu2HAm99a8KYuUkL5LGEQbpRNhz5nzScrwYpEh47BfSaVMCg5G
+addpeer=/ip4/129.121.92.232/tcp/8152/p2p/16Uiu2HAmQSJzJjXUxtyX5rc2bQBAsTvhcjp4GQBPmwqEYu9D8zA5
+addpeer=/ip4/3.120.205.55/tcp/8150/p2p/16Uiu2HAm8tJ2Loxi1hc7Apg4v5i8mqpNxWyRknn1tZUcx8AvbNYj
+addpeer=/ip4/102.39.126.88/tcp/8150/p2p/16Uiu2HAmGHu3c9Htb5nE5zcVbqgZRxAou3qQ5zZumHZ1QVjRRksn
+
+addpeer=/ip4/10.147.18.57/tcp/8150/p2p/16Uiu2HAmGHu3c9Htb5nE5zcVbqgZRxAou3qQ5zZumHZ1QVjRRksn
+  
+addpeer=/ip4/154.70.222.46/tcp/8150/p2p/16Uiu2HAkwG85xVYV9QzKzSnVeKct4XfQFWbJbvxsoDU3Dde7ZyrM
+addpeer=/ip4/3.120.205.55/tcp/8150/p2p/16Uiu2HAmGxNiCJCkyuwLTKmNq1qX2yqoRmLtoDMgHwwiVZzLUyiq
+
+# Peer limit
+maxpeers=350
+cache=2048
+cache.database=70
+
+# RPC auth. Must match NODE_RPC_USER / NODE_RPC_PASS in .env.
+rpcuser=bdag_mainnet_rpc
+rpcpass=change-me-mainnet-rpc-password
+
+# Storage paths
+datadir=/var/lib/bdagStack/node
+logdir=/var/log/bdagStack
+
+# Native metrics endpoint
+metrics=true
+profile=0.0.0.0:1234
+
+# Keep empty unless node mining is intentionally enabled.
+miningaddr=
+
+modules=Blockdag
+modules=miner
+
+evm.http.api=eth,net,web3,txpool,debug
+http.readtimeout=45s
+http.writetimeout=45s
+http.idletimeout=45s
+# Archive mode appends `--gcmode archive` here (bdagrig archive mode); there is
+# no node-level --archival flag. These are go-ethereum flags for the embedded EVM.
+evmenv="--rpc.allow-unprotected-txs --metrics --cache 2048"
+rpcmaxclients=64
+rpcmaxclientsperhost=16
+rpcmaxconcurrentreqs=500
+rpcrequesttimeout=60s
+http.ratelimit=1800
+http.rateburst=3200

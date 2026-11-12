@@ -1,0 +1,369 @@
+name: Build binaries for blockdag-pool-stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. v1.2.3"
+        required: true
+  push:
+    tags:
+      - "stack-v*"
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.26.x"
+  GOFLAGS: "-buildvcs=false"
+  PACKAGE_NAME: "pool-stack-docker"
+  # All of the below are overridable per-repo via Settings > Secrets and
+  # variables > Actions > Variables (e.g. bem-amado/stack points these at its
+  # own personal mirrors while staging changes) rather than editing the
+  # literals here.
+  TARGET_RELEASE_REPO: BlockdagEngineering/bdag-releases
+  BLOCKDAG_NODE_REPO: ${{ vars.BLOCKDAG_NODE_REPO || 'BlockdagEngineering/blockdag-corechain' }}
+  POOL_REPO: ${{ vars.POOL_REPO || 'BlockdagEngineering/pool' }}
+  DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO || 'BlockdagEngineering/redis-dash' }}
+  NODE_DASHBOARD_REPO: ${{ vars.NODE_DASHBOARD_REPO || 'BlockdagEngineering/node-dashboard' }}
+
+jobs:
+  build-and-package:
+    # ubuntu-latest (~24.04) matches dockerfile-* ubuntu:24.04 runtime glibc.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goarch: amd64
+            cc: gcc
+            docker_platform: linux/amd64
+          - target: linux-arm64
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            docker_platform: linux/arm64
+    steps:
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+      # Use PRIVATE_REPO_TOKEN when set (PAT with Contents: Read on private repos).
+      # If unset, falls back to github.token (works only if org allows this workflow to read those private repos).
+      - name: Checkout private blockdag repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BLOCKDAG_NODE_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/blockdag-node
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Checkout private mining pool repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.POOL_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/pool
+          ref: main
+
+      - name: Checkout dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DASHBOARD_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/dashboard
+          ref: main
+
+      - name: Checkout node-only dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.NODE_DASHBOARD_REPO }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
+          path: src/node-dashboard
+          ref: main
+
+      - name: Verify upstream checkouts
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_repo() {
+            local name="$1"
+            shift
+            for path in "$@"; do
+              if [[ -f "$path" ]]; then
+                echo "ok: $name ($path)"
+                return 0
+              fi
+            done
+            echo "::error::Upstream checkout '$name' missing expected files: $*"
+            return 1
+          }
+          verify_repo blockdag-corechain src/blockdag-node/cmd/bdag/bdag.go
+          verify_repo pool src/pool/cmd/pool/main.go
+          verify_repo pool src/pool/cmd/poolworker/main.go
+          verify_repo redis-dash src/dashboard/main.go
+          verify_repo node-dashboard src/node-dashboard/main.go
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install packaging and cross-build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(zip rsync)
+          if [[ "${{ matrix.target }}" == "linux-arm64" ]]; then
+            packages+=(gcc-aarch64-linux-gnu libc6-dev-arm64-cross)
+          fi
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+
+      - name: Build blockdag-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/blockdag-node
+          common_env=(
+            GOOS=linux
+            GOARCH=${{ matrix.goarch }}
+            CGO_ENABLED=1
+            CC=${{ matrix.cc }}
+            GOFLAGS=-buildvcs=false
+          )
+          env "${common_env[@]}" make bdag nodeworker
+          mkdir -p ../../bin
+          cp -f ./build/bin/bdag ../../bin/blockdag-node
+          cp -f ./build/bin/nodeworker ../../bin/nodeworker
+
+      - name: Build mining-pool
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/pool
+          common_env=(
+            GOOS=linux
+            GOARCH=${{ matrix.goarch }}
+            CGO_ENABLED=1
+            CC=${{ matrix.cc }}
+            GOFLAGS=-buildvcs=false
+          )
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool ./cmd/pool
+          # poolworker is pure stdlib; build it without cgo so it stays static.
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o build/bin/poolworker ./cmd/poolworker
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/dashboard-api ./cmd/dashboard-api
+          cp -f ./build/bin/pool ../../bin/mining-pool
+          cp -f ./build/bin/poolworker ../../bin/poolworker
+          cp -f ./build/bin/dashboard-api ../../bin/dashboard-api
+
+      - name: Build dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/dashboard
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o ../../bin/dashboard .
+
+      - name: Build node-only dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/node-dashboard
+          env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
+            go build -trimpath -o ../../bin/node-dashboard .
+
+      - name: Ensure executables
+        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard
+
+      - name: Verify release architecture
+        shell: bash
+        run: |
+          scripts/verify-release-architecture.py --target "${{ matrix.target }}" \
+            bin/blockdag-node \
+            bin/nodeworker \
+            bin/mining-pool \
+            bin/poolworker \
+            bin/dashboard-api \
+            bin/dashboard \
+            bin/node-dashboard
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
+
+      - name: Validate compose (pool Dockerfile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # .env.example must render the compose file on its own: BDAG_STACK_HOST_ROOT
+          # defaults to the compose dir, and the RPC credentials are soft-defaulted,
+          # so no extra environment is needed. POSTGRES_PASSWORD / MINING_POOL_ADDRESS
+          # are required (:?) and supplied by .env.example.
+          test -f .env.example
+          docker compose --env-file .env.example config | grep -q 'dockerfile: dockerfile' || \
+            { echo "::error::Compose must resolve dockerfile for pool tarball env"; exit 1; }
+
+      - name: Create runtime payload zip
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.value }}"
+          TARGET="${{ matrix.target }}"
+          ROOT="${PACKAGE_NAME}-${VERSION}-${TARGET}"
+          OUT="${ROOT}.zip"
+          OUT_SHA256="${OUT}.sha256"
+
+          test -f .env.example || { echo "::error::Missing .env.example"; exit 1; }
+
+          cat > release-payload.env <<EOF
+          BDAG_RELEASE_CHANNEL=production
+          BDAG_RELEASE_VERSION=${VERSION}
+          BDAG_STACK_RELEASE_TAG=${VERSION}
+          BDAG_RELEASE_PAYLOAD_TARGET=${TARGET}
+          BDAG_RELEASE_PAYLOAD_ARCH=${{ matrix.goarch }}
+          DOCKER_PLATFORM=${{ matrix.docker_platform }}
+          EOF
+
+          rm -rf "${ROOT}" "${OUT}" "${OUT_SHA256}"
+          mkdir "${ROOT}"
+          cp docker-compose.yml dockerfile .dockerignore .env.example node.conf.example README.md checksums.txt release-payload.env "${ROOT}/"
+          echo "${VERSION}" > "${ROOT}/version.txt"
+          cp -a bin sql docker tools "${ROOT}/"
+
+
+          # Earlier test steps generate scripts/__pycache__ in the workspace;
+          # check-release-archive.py rejects cache dirs inside the zip.
+          rsync -a --exclude='__pycache__/' --exclude='*.pyc' scripts "${ROOT}/"
+          rsync -a --exclude='runtime/' --exclude='runtime-*/' --exclude='__pycache__/' --exclude='*.pyc' ops "${ROOT}/"
+
+          zip -qr "${OUT}" "${ROOT}"
+          python3 scripts/check-release-archive.py "${OUT}"
+          sha256sum "${OUT}" > "${OUT_SHA256}"
+          rm -rf "${ROOT}"
+
+          ls -lh "${OUT}"
+          SZ="$(stat -c%s "${OUT}")"
+          MAX=$((2 * 1024 * 1024 * 1024 - 256 * 1024 * 1024))
+          if [ "${SZ}" -gt "${MAX}" ]; then
+            echo "::error::Zip ${SZ} bytes exceeds safe GitHub limit (~2GiB cap minus headroom)"
+            exit 1
+          fi
+          echo "artifact=${OUT}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${OUT_SHA256}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.sha256 }}
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: build-and-package
+    env:
+      GH_TOKEN: ${{ secrets.BDAG_STACK_RELEASES_TOKEN || secrets.PRIVATE_REPO_TOKEN }}
+    steps:
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "value=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+
+      - name: Ensure target release repo has a main branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::Set BDAG_STACK_RELEASES_TOKEN or PRIVATE_REPO_TOKEN to a PAT with Contents: Read and write on ${TARGET_RELEASE_REPO}."
+            exit 1
+          fi
+
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${TARGET_RELEASE_REPO}.git"
+          if git ls-remote --exit-code --heads "${remote}" main >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+          git init -b main "${workdir}"
+          cd "${workdir}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cat > README.md <<EOF
+          # bdag-stack-releases
+
+          Public release distribution for BlockDAG stack payloads and the bdagrig CLI.
+          EOF
+          git add README.md
+          git commit -m "Initialize release repository"
+          git remote add origin "${remote}"
+          git push origin main
+
+      - name: Download payload artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.value }}"
+          echo "${VERSION}" > release-assets/version.txt
+          cat > release-assets/release-notes.md <<EOF
+          Stack payload release ${VERSION}.
+
+          These archives are consumed by the public bdagrig CLI, which manages
+          release cutover, dataset selection, and stack startup.
+          EOF
+          ls -lh release-assets
+
+      - name: Upload release assets folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ steps.version.outputs.value }}
+          path: release-assets/
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.TARGET_RELEASE_REPO }}
+          token: ${{ env.GH_TOKEN }}
+          tag_name: ${{ steps.version.outputs.value }}
+          target_commitish: main
+          body_path: release-assets/release-notes.md
+          files: |
+            release-assets/pool-stack-docker-*.zip
+            release-assets/pool-stack-docker-*.zip.sha256
+            release-assets/version.txt
+          draft: false
+          prerelease: false
