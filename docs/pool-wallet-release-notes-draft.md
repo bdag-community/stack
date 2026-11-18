@@ -24,6 +24,19 @@ The dashboard's Global tab shows the pool's total ASIC hashpower when fresh
 telemetry covers the pool; it labels the result as observed when telemetry is
 incomplete.
 
+The Overview tab shows live node and pool status alongside ASIC performance.
+The dashboard displays the BDAG Community release version and includes its UI
+script locally, so it does not need a third-party CDN to render. The Logs tab
+uses a restricted local proxy for the configured node, pool and dashboard logs;
+the dashboard itself no longer has access to Docker's control socket.
+
+Mining runtime controls accept local, non-browser requests only. The optional
+dashboard API uses a freshly generated signing key by default; deployments that
+set `DASHBOARD_JWT_SECRET` must provide at least 32 bytes. Its in-memory users
+and generated signing key are lost when that API restarts. API passwords require
+at least eight characters, are stored as hashes in memory, and authentication
+attempts are rate limited.
+
 Keep the wallet private key in a restricted local configuration file and in a
 protected backup. Never include the key in release artifacts, logs, source
 control, or release notes. Losing the key can make wallet funds unrecoverable.

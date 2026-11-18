@@ -2,7 +2,7 @@
 
 This stack can be run in any environment where docker is installed. It includes
 an upgradable BDAG node, a mining pool with its database, the Redis-backed
-dashboard runtime from `BlockdagEngineering/redis-dash`, and a host-level
+dashboard runtime from `bdag-community/redis-dash`, and a host-level
 status sampler for health telemetry.
 
 On Ubuntu/Debian hosts, install the required Docker packages before running the
@@ -24,11 +24,17 @@ Open a new shell, then verify `docker compose version` works without sudo.
 | `pool` | Mining pool (Stratum :3334), poolworker supervises it as PID 1 | ASIC Stratum and block submission |
 | `pool-db` | Postgres | Pool persistence, schema auto-loaded |
 | `dashboard` | Redis-backed Go dashboard | Browser UI, private Redis state, live ingest, status API |
+| `dashboard-log-proxy` | Restricted local Docker log proxy | Lets the dashboard read configured container logs without Docker control access |
 | `minerops` | Python ops runtime | Reboots stalled ASICs over the LAN |
 | `miner-route` | Alpine + host networking | Keeps a routed gateway to a remote miner LAN alive when configured |
 
 Status sampling runs as a host systemd unit (installed by
 `ops/install-dashboard.sh`), not as a Docker Compose service.
+
+The dashboard listens on `0.0.0.0:8088` by default and its status and log
+views do not require a viewer login. Restrict access to a trusted network, or
+set `DASHBOARD_LISTEN=127.0.0.1:8088` and use an authenticated reverse proxy.
+Miner-control actions have a separate control-token requirement.
 
 
 ## Release package
@@ -48,10 +54,11 @@ Each payload zip contains `bin/` (pre-built `blockdag-node`, `nodeworker`,
 `docker-compose.yml`, `dockerfile`, `.env.example`, `docker/`, `sql/`,
 `tools/`, `scripts/`, `ops/`, and the release metadata files
 `checksums.txt`, `release-payload.env`, and `version.txt`. Release images stage
-their binaries from `./bin`; release workflow source checkouts are limited to
-`BlockdagEngineering/blockdag-corechain`, `BlockdagEngineering/pool`,
-`BlockdagEngineering/redis-dash`, and `BlockdagEngineering/node-dashboard`
-from `main`. The pool stack uses `dashboard` from `redis-dash`; node-only
+their binaries from `./bin`. By default, the release workflow checks out
+`bdag-community/blockdag-corechain`, `bdag-community/pool`,
+`bdag-community/redis-dash`, and `BlockdagEngineering/node-dashboard` from
+`main`; the develop workflow uses `develop`. The pool stack uses `dashboard`
+from `redis-dash`; node-only
 deployments select `node-dashboard`. Legacy collector, dashboard2, CPU-miner,
 and GPU-miner source trees are not packaged or run.
 

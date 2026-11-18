@@ -428,6 +428,33 @@ services:
     volumes:
       - ops-runtime:/var/lib/bdagStack/runtime
 
+  dashboard-log-proxy:
+    <<: *ops-low
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE:-dockerfile}
+      target: dashboard
+      args:
+        <<: *build-args
+        DASHBOARD_BINARY: dashboard
+      additional_contexts:
+        <<: *dev-source-contexts
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: *mining-logging
+    environment:
+      BDAG_LOG_PROXY_MODE: "1"
+      BDAG_NODE_LOG_CONTAINER: ${BDAG_NODE_LOG_CONTAINER:-node}
+      BDAG_POOL_LOG_CONTAINER: ${BDAG_POOL_LOG_CONTAINER:-pool}
+      BDAG_DASHBOARD_LOG_CONTAINER: ${BDAG_DASHBOARD_LOG_CONTAINER:-dashboard}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - dashboard-docker-proxy:/run/dashboard-docker-proxy
+
   dashboard:
     <<: *ops-low
     container_name: dashboard
@@ -451,11 +478,9 @@ services:
       - dashboard-redis:/var/lib/dashboard-redis
       - ${BDAG_HOST_ARP_TABLE_PATH:-/proc/net/arp}:/host/proc/net/arp:ro
       - ${BDAG_STACK_HOST_ROOT:-${PWD}}/ops/runtime:/stack-runtime:ro
-      # Read-only: the dashboard tails container logs via GET /containers/{id}/logs.
-      # :ro guards the socket file, not the API; hardening to a logs-only proxy is a
-      # follow-up that needs a matching dial change in both dashboard repos.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - dashboard-docker-proxy:/run/dashboard-docker-proxy:ro
     depends_on:
+      dashboard-log-proxy: { condition: service_started }
       node: { condition: service_started }
       pool: { condition: service_started, required: false }
     environment:
@@ -507,9 +532,11 @@ services:
       BDAG_LOW_IMPACT_NATIVE_DAG_WINDOW: ${BDAG_LOW_IMPACT_NATIVE_DAG_WINDOW:-90}
       BDAG_DASHBOARD_HEALTH_STALE_SECONDS: ${BDAG_DASHBOARD_HEALTH_STALE_SECONDS:-20}
       BDAG_DASHBOARD_LOG_SOURCE: ${BDAG_DASHBOARD_LOG_SOURCE:-docker}
+      BDAG_DASHBOARD_DOCKER_SOCKET: /run/dashboard-docker-proxy/docker.sock
       BDAG_NODE_STATUS_LOG_TAIL: ${BDAG_NODE_STATUS_LOG_TAIL:-5000}
       BDAG_NODE_LOG_CONTAINER: ${BDAG_NODE_LOG_CONTAINER:-node}
       BDAG_POOL_LOG_CONTAINER: ${BDAG_POOL_LOG_CONTAINER:-pool}
+      BDAG_DASHBOARD_LOG_CONTAINER: ${BDAG_DASHBOARD_LOG_CONTAINER:-dashboard}
       DASHBOARD_TIMEZONE: ${DASHBOARD_TIMEZONE:-Africa/Johannesburg}
       BDAG_MINER_CONTROL_ENABLED: ${BDAG_MINER_CONTROL_ENABLED:-1}
       BDAG_MINER_CONTROL_TOKEN: ${BDAG_MINER_CONTROL_TOKEN:-}
@@ -535,3 +562,4 @@ volumes:
   node-data:
   nodeworker-data:
   dashboard-redis:
+  dashboard-docker-proxy:

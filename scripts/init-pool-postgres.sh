@@ -8,6 +8,7 @@
 #   - Generating a strong POSTGRES_PASSWORD if .env still has the placeholder.
 #   - Quick smoke-tests against the live DB.
 set -euo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
@@ -41,8 +42,9 @@ if [[ -z "${POSTGRES_PASSWORD:-}" || "${POSTGRES_PASSWORD}" == "change_me_to_a_s
   fi
   NEW_PW="$(openssl rand -hex 32)"
   echo "POSTGRES_PASSWORD looks like a placeholder; writing a new secret to ${ENV_FILE}."
+  chmod 600 "${ENV_FILE}"
   if grep -qE '^POSTGRES_PASSWORD=' "${ENV_FILE}"; then
-    sed -i.bak "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" "${ENV_FILE}"
+    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" "${ENV_FILE}"
   else
     printf 'POSTGRES_PASSWORD=%s\n' "${NEW_PW}" >>"${ENV_FILE}"
   fi
