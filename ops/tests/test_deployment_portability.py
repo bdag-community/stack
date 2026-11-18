@@ -101,7 +101,7 @@ root 41658 41563 0 16:41 ? 00:00:00 /run/rosetta/rosetta /usr/sbin/runuser runus
         self.assertIn("BDAG_DASHBOARD_LOG_SOURCE: ${BDAG_DASHBOARD_LOG_SOURCE:-docker}", compose)
         self.assertIn("BDAG_POOL_URL: ${BDAG_POOL_URL:-}", compose)
         self.assertIn("${BDAG_HOST_ARP_TABLE_PATH:-/proc/net/arp}:/host/proc/net/arp:ro", compose)
-        self.assertIn("ADDR: ${DASHBOARD_LISTEN:-0.0.0.0:8088}", compose)
+        self.assertIn("ADDR: ${DASHBOARD_LISTEN:-127.0.0.1:8088}", compose)
 
     def test_release_runtime_excludes_retired_collector_and_cpu_miner(self) -> None:
         compose = (ROOT_DIR / "docker-compose.yml").read_text(encoding="utf-8")

@@ -28,7 +28,9 @@ The Overview tab shows live node and pool status alongside ASIC performance.
 The dashboard displays the BDAG Community release version and includes its UI
 script locally, so it does not need a third-party CDN to render. The Logs tab
 uses a restricted local proxy for the configured node, pool and dashboard logs;
-the dashboard itself no longer has access to Docker's control socket.
+the dashboard itself no longer has access to Docker's control socket. The
+dashboard listens on localhost by default; operators can opt in to LAN access
+through `DASHBOARD_LISTEN` or use an authenticated reverse proxy.
 
 Mining runtime controls accept local, non-browser requests only. The optional
 dashboard API uses a freshly generated signing key by default; deployments that

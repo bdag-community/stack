@@ -24,7 +24,7 @@ class StackNamingCoherenceTests(unittest.TestCase):
         self.assertIn("BDAG_DASHBOARD_REDIS_ENABLED: ${BDAG_DASHBOARD_REDIS_ENABLED:-1}", compose)
         self.assertIn("BDAG_DASHBOARD_LOG_SOURCE: ${BDAG_DASHBOARD_LOG_SOURCE:-docker}", compose)
         self.assertIn("BDAG_POOL_URL: ${BDAG_POOL_URL:-}", compose)
-        self.assertIn("ADDR: ${DASHBOARD_LISTEN:-0.0.0.0:8088}", compose)
+        self.assertIn("ADDR: ${DASHBOARD_LISTEN:-127.0.0.1:8088}", compose)
         stack_defaults = read("ops/config/stack-defaults.env")
         self.assertIn("BDAG_DASHBOARD_STATUS_CACHE_SECONDS=10", stack_defaults)
         self.assertIn("BDAG_STATUS_PAYLOAD_STALE_AFTER_SECONDS=120", stack_defaults)

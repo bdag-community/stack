@@ -31,17 +31,19 @@ Open a new shell, then verify `docker compose version` works without sudo.
 Status sampling runs as a host systemd unit (installed by
 `ops/install-dashboard.sh`), not as a Docker Compose service.
 
-The dashboard listens on `0.0.0.0:8088` by default and its status and log
-views do not require a viewer login. Restrict access to a trusted network, or
-set `DASHBOARD_LISTEN=127.0.0.1:8088` and use an authenticated reverse proxy.
-Miner-control actions have a separate control-token requirement.
+The dashboard listens on `127.0.0.1:8088` by default and its status and log
+views do not require a viewer login. To access it remotely, use an authenticated
+reverse proxy, or explicitly set `DASHBOARD_LISTEN` to a trusted LAN interface
+and restrict access at the network boundary. Miner-control actions have a
+separate control-token requirement.
 
 
 ## Release package
 
 The stack release repo publishes runtime payload zips only. The public
 `bdagrig` CLI is the installer/orchestrator and fetches these payloads from
-`BlockdagEngineering/bdag-stack-releases`.
+the planned community-owned `bdag-community/bdag-stack-releases` repository.
+That destination must be provisioned and verified before a release is published.
 
 Stack GitHub Releases attach one runtime payload zip per Linux container
 architecture:
@@ -359,7 +361,7 @@ The release builder also runs `scripts/verify-release-architecture.py` before
 image assembly so ARM64 packages cannot silently receive AMD64 binaries; the
 checker reads binary headers directly so it can be used from Linux build hosts.
 
-The dashboard UI and status API are normally exposed on host port `8088`.
+The dashboard UI and status API listen on localhost port `8088` by default.
 Global production data must be sourced from native BlockDAG chain RPC
 `getBlockCount`/ordered block/coinbase calls. EVM RPC belongs to wallet balance
 views only. The packaged redis-dash UI on `DASHBOARD_HOST_PORT` is the

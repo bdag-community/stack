@@ -21,7 +21,7 @@ env:
   # variables > Actions > Variables (e.g. bem-amado/stack points these at its
   # own personal mirrors while staging changes) rather than editing the
   # literals here.
-  TARGET_RELEASE_REPO: BlockdagEngineering/bdag-releases
+  TARGET_RELEASE_REPO: ${{ vars.BDAG_STACK_RELEASES_REPO || 'bdag-community/bdag-stack-releases' }}
   BLOCKDAG_NODE_REPO: ${{ vars.BLOCKDAG_NODE_REPO || 'bdag-community/blockdag-corechain' }}
   POOL_REPO: ${{ vars.POOL_REPO || 'bdag-community/pool' }}
   DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO || 'bdag-community/redis-dash' }}

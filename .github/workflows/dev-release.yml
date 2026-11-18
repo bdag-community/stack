@@ -16,7 +16,7 @@ env:
   PACKAGE_NAME: "pool-stack-docker"
   RELEASE_CHANNEL: "develop"
   COMPONENT_REF: "develop"
-  TARGET_RELEASE_REPO: "BlockdagEngineering/bdag-stack-releases"
+  TARGET_RELEASE_REPO: ${{ vars.BDAG_STACK_RELEASES_REPO || 'bdag-community/bdag-stack-releases' }}
 
 jobs:
   validate-dev-release:
