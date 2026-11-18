@@ -26,6 +26,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
+chmod 600 "${ENV_FILE}"
+
 # shellcheck disable=SC1090
 set -a
 source "${ENV_FILE}"
@@ -42,7 +44,6 @@ if [[ -z "${POSTGRES_PASSWORD:-}" || "${POSTGRES_PASSWORD}" == "change_me_to_a_s
   fi
   NEW_PW="$(openssl rand -hex 32)"
   echo "POSTGRES_PASSWORD looks like a placeholder; writing a new secret to ${ENV_FILE}."
-  chmod 600 "${ENV_FILE}"
   if grep -qE '^POSTGRES_PASSWORD=' "${ENV_FILE}"; then
     sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${NEW_PW}|" "${ENV_FILE}"
   else
