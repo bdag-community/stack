@@ -180,6 +180,12 @@ Configure complete P2P multiaddrs with peer IDs in `.env` or `node.conf`.
 `BOOTSTRAP_PEER_ADDRESSES` and `node.conf` `addpeer` lines are ordinary startup
 peers; address class is not a sync mode, priority class, or eligibility signal.
 
+DHT discovery can fail when the peers responsible for a discovery record
+withhold it. Operators who can maintain trusted peer identities can avoid DHT
+discovery with the node's `--p2pstaticpeersonly` flag and explicitly configured
+peer multiaddrs. Use at least two independent, fresh peers; this mode cannot
+discover replacements automatically if those peers become unavailable.
+
 During upgrades, `ops/update-local-peers.py` imports any existing
 address-bucket values only long enough to normalize complete P2P multiaddrs
 into `BDAG_FASTSYNC_PEERS`, then clears those bucket values. Do not add new LAN,
