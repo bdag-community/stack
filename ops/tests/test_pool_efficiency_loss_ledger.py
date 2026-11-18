@@ -299,6 +299,21 @@ class PoolJobStateSummaryTests(unittest.TestCase):
         pool_ops.fetch_json_url = self.old_fetch_json_url
         pool_ops.pool_metrics_endpoint_for_container = self.old_pool_metrics_endpoint_for_container
 
+    def test_summary_reports_missing_running_pool_evidence(self) -> None:
+        pool_ops.POOL_CONTAINERS = ["pool-a", "pool-b"]
+        pool_ops.pool_metrics_endpoint_for_container = lambda name, _info: (
+            ("127.0.0.1:9090", "") if name == "pool-a" else ("", "unavailable")
+        )
+        pool_ops.fetch_json_url = lambda *_args, **_kwargs: {
+            "status": "ok", "active_connections": 1, "authorized_connections": 1,
+            "subscribed_connections": 1, "ready_connections": 1, "clients": [],
+        }
+        summary = pool_ops.collect_pool_job_state_summary({
+            "pool-a": {"running": True}, "pool-b": {"running": True},
+        })
+        self.assertEqual(2, summary["running_pool_containers"])
+        self.assertEqual(1, summary["reporting_pool_containers"])
+
     def test_pool_job_state_summary_preserves_live_ready_lanes_for_no_logs_status(self) -> None:
         pool_ops.pool_metrics_endpoint_for_container = lambda *_args, **_kwargs: ("127.0.0.1:9090", "")
         pool_ops.fetch_json_url = lambda *_args, **_kwargs: {

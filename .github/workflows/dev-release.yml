@@ -82,7 +82,7 @@ jobs:
       - name: Checkout private blockdag repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/blockdag-corechain
+          repository: bdag-community/blockdag-corechain
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/blockdag-node
           ref: develop
@@ -90,7 +90,7 @@ jobs:
       - name: Checkout private mining pool repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/pool
+          repository: bdag-community/pool
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/pool
           ref: develop
@@ -98,7 +98,7 @@ jobs:
       - name: Checkout dashboard repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/redis-dash
+          repository: bdag-community/redis-dash
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/dashboard
           ref: develop
@@ -196,11 +196,17 @@ jobs:
             GOFLAGS=-buildvcs=false
           )
           env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool ./cmd/pool
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-payer ./cmd/pool-payer
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-wallet-init ./cmd/pool-wallet-init
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-schema-init ./cmd/pool-schema-init
           env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/dashboard-api ./cmd/dashboard-api
           # poolworker is pure stdlib; build it without cgo so it stays static.
           env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
             go build -trimpath -o build/bin/poolworker ./cmd/poolworker
           cp -f ./build/bin/pool ../../bin/mining-pool
+          cp -f ./build/bin/pool-payer ../../bin/pool-payer
+          cp -f ./build/bin/pool-wallet-init ../../bin/pool-wallet-init
+          cp -f ./build/bin/pool-schema-init ../../bin/pool-schema-init
           cp -f ./build/bin/dashboard-api ../../bin/dashboard-api
           cp -f ./build/bin/poolworker ../../bin/poolworker
 
@@ -221,7 +227,7 @@ jobs:
             go build -trimpath -o ../../bin/node-dashboard .
 
       - name: Ensure executables
-        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard
+        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/pool-payer bin/pool-wallet-init bin/pool-schema-init bin/dashboard-api bin/dashboard bin/node-dashboard
 
       - name: Verify release architecture
         shell: bash
@@ -231,6 +237,9 @@ jobs:
             bin/nodeworker \
             bin/mining-pool \
             bin/poolworker \
+            bin/pool-payer \
+            bin/pool-wallet-init \
+            bin/pool-schema-init \
             bin/dashboard-api \
             bin/dashboard \
             bin/node-dashboard
@@ -238,7 +247,7 @@ jobs:
       - name: Generate checksums
         shell: bash
         run: |
-          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
+          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/pool-payer bin/pool-wallet-init bin/pool-schema-init bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
 
       - name: Validate compose
         shell: bash
@@ -439,6 +448,8 @@ jobs:
 
           Component source SHAs are attached as release-provenance-*.json and included in each payload zip as release-provenance.json.
           EOF
+          printf '\n' >> release-assets/release-notes.md
+          cat docs/pool-wallet-release-notes-draft.md >> release-assets/release-notes.md
           ls -lh release-assets
 
       - name: Upload release assets folder

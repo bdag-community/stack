@@ -7,7 +7,7 @@ TEST_STACK="${TEST_STACK:-$REPOS_DIR/test-stack}"
 TARGET="${TARGET:-linux-amd64}"
 GOOS="${GOOS:-linux}"
 CGO_ENABLED="${CGO_ENABLED:-1}"
-ALL_OUTPUTS=(blockdag-node nodeworker mining-pool poolworker dashboard-api dashboard node-dashboard)
+ALL_OUTPUTS=(blockdag-node nodeworker mining-pool poolworker pool-payer pool-wallet-init pool-schema-init dashboard-api dashboard node-dashboard)
 VERIFY_OUTPUTS=()
 
 usage() {
@@ -95,12 +95,19 @@ build_pool() {
   local src="$REPOS_DIR/pool"
   need_file "$src/cmd/pool/main.go"
   need_file "$src/cmd/poolworker/main.go"
+  need_file "$src/cmd/pool-payer/main.go"
+  need_file "$src/cmd/pool-wallet-init/main.go"
+  need_file "$src/cmd/pool-schema-init/main.go"
   need_file "$src/cmd/dashboard-api/main.go"
   mkdir -p "$TEST_STACK/bin" "$src/build/bin"
   (
     cd "$src"
     go_common_env go build -buildvcs=false -trimpath -o "$src/build/bin/pool" ./cmd/pool
     go_common_env go build -buildvcs=false -trimpath -o "$src/build/bin/dashboard-api" ./cmd/dashboard-api
+    for command in pool-payer pool-wallet-init pool-schema-init; do
+      go_common_env go build -buildvcs=false -trimpath -o "$src/build/bin/$command" "./cmd/$command"
+      cp -f "$src/build/bin/$command" "$TEST_STACK/bin/$command"
+    done
     # poolworker is pure stdlib; build it without cgo so it stays static. Invoke
     # env directly rather than prefixing go_common_env — an assignment in front
     # of a function call leaks into the caller's scope in bash.
@@ -162,10 +169,13 @@ run_component() {
       mark_output blockdag-node
       mark_output nodeworker
       ;;
-    pool|mining-pool|poolworker|dashboard-api)
+    pool|mining-pool|poolworker|pool-payer|pool-wallet-init|pool-schema-init|dashboard-api)
       build_pool
       mark_output mining-pool
       mark_output poolworker
+      mark_output pool-payer
+      mark_output pool-wallet-init
+      mark_output pool-schema-init
       mark_output dashboard-api
       ;;
     dashboard)
@@ -186,6 +196,10 @@ run_component() {
       mark_output blockdag-node
       mark_output nodeworker
       mark_output mining-pool
+      mark_output poolworker
+      mark_output pool-payer
+      mark_output pool-wallet-init
+      mark_output pool-schema-init
       mark_output dashboard-api
       mark_output dashboard
       mark_output node-dashboard

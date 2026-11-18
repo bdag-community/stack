@@ -98,6 +98,8 @@ services:
     restart: unless-stopped
     logging: *mining-logging
     network_mode: host
+    depends_on:
+      pool-wallet: { condition: service_completed_successfully, required: false }
     environment:
       TMPDIR: /tmp
       TMP: /tmp
@@ -106,8 +108,10 @@ services:
       # touches node-data, so bind-mounted chain data comes out owned by
       # whoever ran `docker compose up` instead of an image-internal id
       # that happens to collide with an unrelated host account.
-      PUID: ${PUID:-}
-      PGID: ${PGID:-}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      BDAG_POOL_REWARD_IPC_PATH: ${BDAG_POOL_REWARD_IPC_PATH:-}
+      POOL_WALLET_PUBLIC_FILE: /var/lib/bdagStack/pool-reward/wallet-address
       BDAG_NETWORK: ${BDAG_NETWORK:-mainnet}
       P2P_PORT: ${P2P_PORT:-8150}
       BDAG_EPHEMERAL_DIR: /run/bdag-ephemeral
@@ -144,6 +148,7 @@ services:
     # runtime provenance checks own chain DB validation. Do not use BDAG_NODE_DATA_DIR.
 
       - ${NODE_DATA_DIR:-./node-data}:/var/lib/bdagStack/node
+      - ${POOL_REWARD_RUNTIME_DIR:-./pool-runtime}:/var/lib/bdagStack/pool-reward
       - nodeworker-data:/var/lib/bdagStack/nodeworker
       - ${BDAG_STACK_HOST_ROOT:-${PWD}}/ops/runtime:/var/lib/bdagStack/runtime:ro
       - ${SNAPSHOT_HOST_PATH:-./docker/no-snapshot.marker}:/snapshot/latest.bdsnap:ro
@@ -161,12 +166,63 @@ services:
       start_period: 5m
 
   # --------------------------------------------------------------------------
+  # Generate or reuse the installation's private wallet before node and pool
+  # startup. Only the public address is shared with mining services.
+  pool-wallet:
+    <<: *pool-critical
+    profiles: ["pool"]
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE:-dockerfile}
+      target: pool
+      additional_contexts:
+        <<: *dev-source-contexts
+      args:
+        <<: *build-args
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/pool-wallet-bootstrap.sh"]
+    network_mode: none
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      POOL_COINBASE_ADDRESS: ${POOL_COINBASE_ADDRESS:-}
+      MINING_POOL_ADDRESS: ${MINING_POOL_ADDRESS:-}
+      MINING_ADDRESS: ${MINING_ADDRESS:-}
+    volumes:
+      - ${POOL_WALLET_DIR:-./pool-wallet}:/var/lib/bdagStack/pool-wallet
+      - ${POOL_REWARD_RUNTIME_DIR:-./pool-runtime}:/var/lib/bdagStack/pool-reward
+
+  # Prepare the durable payout schema before the pool starts. A populated
+  # legacy ledger is held for an explicit migration rather than rewritten.
+  pool-schema:
+    <<: *pool-critical
+    profiles: ["pool"]
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE:-dockerfile}
+      target: pool
+      additional_contexts:
+        <<: *dev-source-contexts
+      args:
+        <<: *build-args
+    user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: ["/usr/local/bin/pool-schema-init"]
+    network_mode: host
+    depends_on:
+      pool-db: { condition: service_healthy }
+    environment:
+      PG_URL: ${PG_URL:-postgres://${POSTGRES_USER:-bdag_pool}:${POSTGRES_PASSWORD}@${POOL_DB_HOST:-127.0.0.1}:${POOL_DB_PORT:-55432}/${POSTGRES_DB:-bdagpool}?sslmode=disable}
+      POOL_UPGRADE_LEGACY_LEDGER: ${POOL_UPGRADE_LEGACY_LEDGER:-0}
+
   # Mining pool. Connects to node RPC and Postgres.
   # --------------------------------------------------------------------------
   pool:
     <<: *pool-critical
     profiles: ["pool"]
     container_name: pool
+    user: "${PUID:-1000}:${PGID:-1000}"
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:
       context: .
@@ -187,6 +243,8 @@ services:
       - /var/tmp:size=${BDAG_CONTAINER_TMPFS_SIZE:-128m},mode=1777
     depends_on:
       pool-db: { condition: service_healthy }
+      pool-schema: { condition: service_completed_successfully }
+      pool-wallet: { condition: service_completed_successfully }
     environment:
       TMPDIR: /tmp
       TMP: /tmp
@@ -256,13 +314,51 @@ services:
       # this probe can make miners subscribe, then disconnect before authorize.
       POOL_STRATUM_SERVER_FIRST_DIFFICULTY_PROBE: ${POOL_STRATUM_SERVER_FIRST_DIFFICULTY_PROBE:-false}
       WALLET_RPC_URL:     ${WALLET_RPC_URL:-http://127.0.0.1:${EVM_HTTP_PORT:-18545}}
-      POOL_PRIVATE_KEY:   ${POOL_PRIVATE_KEY:-}
+      EVM_RPC_URL: ${WALLET_RPC_URL:-http://127.0.0.1:${EVM_HTTP_PORT:-18545}}
+      POOL_REWARD_IPC_PATH: /var/lib/bdagStack/pool-reward/reward.sock
+      POOL_WALLET_PUBLIC_FILE: /var/lib/bdagStack/pool-reward/wallet-address
+      POOL_REWARD_RECOVERY_DIR: /var/lib/bdagStack/pool-reward/recovery
       POOL_COINBASE_ADDRESS: ${POOL_COINBASE_ADDRESS:-}
       MINING_POOL_ADDRESS: ${MINING_POOL_ADDRESS:-}
       METRICS_ADDR:       ${METRICS_ADDR:-0.0.0.0:9090}
       POOL_INSTANCE_ID:   ${POOL_INSTANCE_ID:-}
     volumes:
       - ${BDAG_HOST_ARP_TABLE_PATH:-/proc/net/arp}:/host/proc/net/arp:ro
+      - ${POOL_REWARD_RUNTIME_DIR:-./pool-runtime}:/var/lib/bdagStack/pool-reward:ro
+
+  # Only this worker receives the private wallet. It selects credits bound to
+  # that wallet and checks the associated reward before signing.
+  pool-payer:
+    <<: *pool-critical
+    profiles: ["pool"]
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE:-dockerfile}
+      target: pool
+      additional_contexts:
+        <<: *dev-source-contexts
+      args:
+        <<: *build-args
+    user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: ["/usr/local/bin/pool-payer"]
+    restart: unless-stopped
+    logging: *mining-logging
+    network_mode: host
+    depends_on:
+      pool-db: { condition: service_healthy }
+      pool: { condition: service_started }
+    environment:
+      PG_URL: ${PG_URL:-postgres://${POSTGRES_USER:-bdag_pool}:${POSTGRES_PASSWORD}@${POOL_DB_HOST:-127.0.0.1}:${POOL_DB_PORT:-55432}/${POSTGRES_DB:-bdagpool}?sslmode=disable}
+      NODE_RPC_URL: ${NODE_RPC_URL:-http://127.0.0.1:38131}
+      NODE_RPC_USER: ${NODE_RPC_USER:-}
+      NODE_RPC_PASS: ${NODE_RPC_PASS:-}
+      EVM_RPC_URL: ${WALLET_RPC_URL:-http://127.0.0.1:${EVM_HTTP_PORT:-18545}}
+      POOL_WALLET_ENV_FILE: /var/lib/bdagStack/pool-wallet/.env
+      POOL_REWARD_RECOVERY_DIR: /var/lib/bdagStack/pool-reward/recovery
+    volumes:
+      - ${POOL_WALLET_DIR:-./pool-wallet}:/var/lib/bdagStack/pool-wallet
+      - ${POOL_REWARD_RUNTIME_DIR:-./pool-runtime}:/var/lib/bdagStack/pool-reward:ro
   # --------------------------------------------------------------------------
   # Host-side helper layer, containerised. Ops tooling uses
   # dedicated repair targets that inherit the shared ops runtime (python3 +
@@ -303,7 +399,8 @@ services:
   # Dashboard runtime: Go UI + private Redis + live ingest workers.
   # --------------------------------------------------------------------------
   minerops:
-    profiles: ["pool"]
+    # ASIC reboot automation must be explicitly enabled by the operator.
+    profiles: ["minerops"]
     container_name: minerops
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     build:

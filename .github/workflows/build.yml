@@ -22,9 +22,9 @@ env:
   # own personal mirrors while staging changes) rather than editing the
   # literals here.
   TARGET_RELEASE_REPO: BlockdagEngineering/bdag-releases
-  BLOCKDAG_NODE_REPO: ${{ vars.BLOCKDAG_NODE_REPO || 'BlockdagEngineering/blockdag-corechain' }}
-  POOL_REPO: ${{ vars.POOL_REPO || 'BlockdagEngineering/pool' }}
-  DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO || 'BlockdagEngineering/redis-dash' }}
+  BLOCKDAG_NODE_REPO: ${{ vars.BLOCKDAG_NODE_REPO || 'bdag-community/blockdag-corechain' }}
+  POOL_REPO: ${{ vars.POOL_REPO || 'bdag-community/pool' }}
+  DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO || 'bdag-community/redis-dash' }}
   NODE_DASHBOARD_REPO: ${{ vars.NODE_DASHBOARD_REPO || 'BlockdagEngineering/node-dashboard' }}
 
 jobs:
@@ -161,11 +161,17 @@ jobs:
             GOFLAGS=-buildvcs=false
           )
           env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool ./cmd/pool
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-payer ./cmd/pool-payer
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-wallet-init ./cmd/pool-wallet-init
+          env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/pool-schema-init ./cmd/pool-schema-init
           # poolworker is pure stdlib; build it without cgo so it stays static.
           env GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 GOFLAGS=-buildvcs=false \
             go build -trimpath -o build/bin/poolworker ./cmd/poolworker
           env "${common_env[@]}" go build -buildvcs=false -trimpath -o build/bin/dashboard-api ./cmd/dashboard-api
           cp -f ./build/bin/pool ../../bin/mining-pool
+          cp -f ./build/bin/pool-payer ../../bin/pool-payer
+          cp -f ./build/bin/pool-wallet-init ../../bin/pool-wallet-init
+          cp -f ./build/bin/pool-schema-init ../../bin/pool-schema-init
           cp -f ./build/bin/poolworker ../../bin/poolworker
           cp -f ./build/bin/dashboard-api ../../bin/dashboard-api
 
@@ -186,7 +192,7 @@ jobs:
             go build -trimpath -o ../../bin/node-dashboard .
 
       - name: Ensure executables
-        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard
+        run: chmod +x bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/pool-payer bin/pool-wallet-init bin/pool-schema-init bin/dashboard-api bin/dashboard bin/node-dashboard
 
       - name: Verify release architecture
         shell: bash
@@ -196,6 +202,9 @@ jobs:
             bin/nodeworker \
             bin/mining-pool \
             bin/poolworker \
+            bin/pool-payer \
+            bin/pool-wallet-init \
+            bin/pool-schema-init \
             bin/dashboard-api \
             bin/dashboard \
             bin/node-dashboard
@@ -203,7 +212,7 @@ jobs:
       - name: Generate checksums
         shell: bash
         run: |
-          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
+          sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/pool-payer bin/pool-wallet-init bin/pool-schema-init bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt
 
       - name: Validate compose (pool Dockerfile)
         shell: bash
@@ -344,6 +353,8 @@ jobs:
           These archives are consumed by the public bdagrig CLI, which manages
           release cutover, dataset selection, and stack startup.
           EOF
+          printf '\n' >> release-assets/release-notes.md
+          cat docs/pool-wallet-release-notes-draft.md >> release-assets/release-notes.md
           ls -lh release-assets
 
       - name: Upload release assets folder

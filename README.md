@@ -227,9 +227,11 @@ before using the data.
 
 ## Runtime Stability Defaults
 
-No-miner deployments are sync-only by default: `BDAG_ENABLE_NODE_MINING=0`,
-`BDAG_NODE_MODULES=Blockdag,miner`, and an empty `BDAG_NODE_MINING_ARGS`. Enable node
-mining/template flags only when real miners are attached. Do not add unsynced
+Deployments without configured or connected miners are sync-only by default.
+The pool profile creates a private wallet in `pool-wallet/.env` on first startup
+and reuses it on later starts. Protect and back up that file: losing its key can
+make its funds unrecoverable. When miners are configured, the runtime enables
+templates for that wallet. Do not add unsynced
 mining bypass flags; readiness gates must fail closed until node sync and P2P
 freshness are healthy. The dashboard, status sampler, sync coordinator,
 30-minute mining guard, node child guard, P2P guard, local peers, and

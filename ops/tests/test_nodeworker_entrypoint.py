@@ -179,6 +179,18 @@ class NodeworkerEntrypointTest(unittest.TestCase):
         self.assertNotIn("--allowminingwhennearlysynced", result.stdout)
         self.assertNotIn("--allowsubmitwhennotsynced", result.stdout)
 
+    def test_wallet_address_is_used_when_node_templates_are_enabled(self) -> None:
+        address = "0xA1Ee1005c4Ff181e93e717D2C624554b66AB7DFc"
+        with tempfile.TemporaryDirectory() as tmp:
+            public = Path(tmp) / "wallet-address"
+            public.write_text(address + "\n", encoding="utf-8")
+            result = self.run_entrypoint({"POOL_WALLET_PUBLIC_FILE": str(public), "BDAG_ENABLE_NODE_MINING": "1"})
+            self.assert_stdout_contains(result, f"--miningaddr={address}")
+            self.assert_stdout_contains(result, "--miner")
+            disabled = self.run_entrypoint({"POOL_WALLET_PUBLIC_FILE": str(public), "BDAG_ENABLE_NODE_MINING": "0"})
+            self.assertEqual(disabled.returncode, 0, disabled.stderr)
+            self.assertNotIn("--miner", disabled.stdout)
+
     def test_nodeworker_enables_mining_readiness_recovery_by_default(self) -> None:
         result = self.run_entrypoint({})
 

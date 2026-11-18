@@ -24,6 +24,8 @@ System Volume Information/
 # build itself only needs .env.example.
 .env
 .env.snapshot
+pool-wallet/
+pool-runtime/
 node.conf
 node.snapshot.conf
 

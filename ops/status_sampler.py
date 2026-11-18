@@ -9,6 +9,7 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 import automation_control
@@ -291,6 +292,19 @@ def configured_mining_address() -> str:
         value = config_value(key).strip()
         if value:
             return value
+    runtime = Path(config_value("POOL_REWARD_RUNTIME_DIR", "./pool-runtime") or "./pool-runtime")
+    if not runtime.is_absolute():
+        runtime = PROJECT_ROOT / runtime
+    address_file = runtime / "wallet-address"
+    try:
+        if address_file.is_symlink():
+            return ""
+        with address_file.open("r", encoding="ascii") as file:
+            value = file.read(128).strip()
+    except (OSError, UnicodeError):
+        return ""
+    if valid_mining_address(value):
+        return value
     return ""
 
 

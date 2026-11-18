@@ -11,57 +11,7 @@
 # Snapshot import is runtime-only via a read-only bind mount handled by
 # docker/entrypoint-nodeworker.sh. Do not copy .bdsnap files into the image.
 
-# ----------------------------------------------------------------------------
-# Common base
-# ----------------------------------------------------------------------------
-FROM golang:1.26-bookworm AS base
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    make git gcc g++ libc6-dev jq ca-certificates wget \
- && rm -rf /var/lib/apt/lists/*
-
-# ----------------------------------------------------------------------------
-# Node Build Stage (blockdag-corechain)
-# ----------------------------------------------------------------------------
-FROM base AS node-build
-WORKDIR /src
-COPY bin ./bin
-RUN set -eu; mkdir -p /out; \
-    test -f ./bin/blockdag-node || { echo 'ERROR: ./bin/blockdag-node missing'; exit 1; }; \
-    test -f ./bin/nodeworker     || { echo 'ERROR: ./bin/nodeworker missing'; exit 1; }; \
-    cp -f ./bin/blockdag-node /out/blockdag-node && \
-    cp -f ./bin/nodeworker    /out/nodeworker && \
-    chmod +x /out/blockdag-node /out/nodeworker
-
-# ----------------------------------------------------------------------------
-# Pool Build Stage (asic-pool) — binaries from tarball bin/
-# ----------------------------------------------------------------------------
-FROM base AS pool-build
-WORKDIR /src
-COPY bin ./bin
-RUN set -eu; mkdir -p /out; \
-    test -f ./bin/mining-pool    || { echo 'ERROR: ./bin/mining-pool missing'; exit 1; }; \
-    test -f ./bin/poolworker     || { echo 'ERROR: ./bin/poolworker missing'; exit 1; }; \
-    cp -f ./bin/mining-pool    /out/mining-pool && \
-    cp -f ./bin/poolworker     /out/poolworker && \
-    chmod +x /out/mining-pool /out/poolworker
-
-# ----------------------------------------------------------------------------
-# Dashboard Build Stage
-# ----------------------------------------------------------------------------
-FROM base AS dashboard-build
-WORKDIR /src
-COPY bin ./bin
-ARG DASHBOARD_BINARY=dashboard
-RUN set -eu; \
-    case "$DASHBOARD_BINARY" in dashboard|node-dashboard) ;; *) echo "ERROR: unsupported DASHBOARD_BINARY=$DASHBOARD_BINARY"; exit 1 ;; esac; \
-    mkdir -p /out; \
-    test -f "./bin/$DASHBOARD_BINARY" || { echo "ERROR: ./bin/$DASHBOARD_BINARY missing"; exit 1; }; \
-    cp -f "./bin/$DASHBOARD_BINARY" /out/dashboard && \
-    chmod +x /out/dashboard
-
-# ----------------------------------------------------------------------------
-# Node Runtime Stage (with optional snapshot import)
-# ----------------------------------------------------------------------------
+# Runtime images consume the prebuilt binaries directly.
 FROM ubuntu:24.04 AS node
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -72,11 +22,12 @@ RUN groupadd -r bdagStack && useradd -r -g bdagStack -d /var/lib/bdagStack -m bd
 RUN mkdir -p /etc/bdagStack /var/lib/bdagStack/node/mainnet /var/lib/bdagStack/nodeworker /var/log/bdagStack \
  && chown -R bdagStack:bdagStack /var/lib/bdagStack /var/log/bdagStack /etc/bdagStack
 
-COPY --from=node-build /out/blockdag-node  /usr/local/bin/blockdag-node
-COPY --from=node-build /out/nodeworker     /usr/local/bin/nodeworker
+COPY bin/blockdag-node  /usr/local/bin/blockdag-node
+COPY bin/nodeworker     /usr/local/bin/nodeworker
 RUN chmod +x /usr/local/bin/blockdag-node /usr/local/bin/nodeworker
 
 COPY docker/entrypoint-nodeworker.sh /usr/local/bin/docker-entrypoint-nodeworker.sh
+COPY docker/pool-wallet-address.sh /usr/local/bin/pool-wallet-address.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint-nodeworker.sh
 
 # Snapshot path is relative to build context (Compose sets this in .env for dev vs release).
@@ -123,9 +74,13 @@ RUN groupadd -r bdagStack && useradd -r -g bdagStack -d /var/lib/bdagStack -m bd
  && mkdir -p /etc/bdagStack /var/lib/bdagStack/pool /var/log/bdagStack \
  && chown -R bdagStack:bdagStack /var/lib/bdagStack /var/log/bdagStack /etc/bdagStack
 
-COPY --from=pool-build /out/mining-pool    /usr/local/bin/mining-pool
-COPY --from=pool-build /out/poolworker     /usr/local/bin/poolworker
-RUN chmod +x /usr/local/bin/mining-pool /usr/local/bin/poolworker
+COPY bin/mining-pool    /usr/local/bin/mining-pool
+COPY bin/poolworker     /usr/local/bin/poolworker
+COPY bin/pool-payer /usr/local/bin/pool-payer
+COPY bin/pool-wallet-init /usr/local/bin/pool-wallet-init
+COPY bin/pool-schema-init /usr/local/bin/pool-schema-init
+COPY docker/pool-wallet-bootstrap.sh docker/pool-wallet-address.sh docker/pool-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/mining-pool /usr/local/bin/poolworker /usr/local/bin/pool-payer /usr/local/bin/pool-wallet-init /usr/local/bin/pool-schema-init
 
 # godotenv loads this path at runtime; tarball uses committed .env.example. Copy a
 # local `.env` on the host only if you want non-default keys in-file.
@@ -135,7 +90,7 @@ RUN chown bdagStack:bdagStack /var/lib/bdagStack/pool/.env
 USER bdagStack
 WORKDIR /var/lib/bdagStack/pool
 EXPOSE 3334 8080
-ENTRYPOINT ["/usr/local/bin/poolworker", "--pool-binary=/usr/local/bin/mining-pool"]
+ENTRYPOINT ["/usr/local/bin/pool-entrypoint.sh"]
 
 # ----------------------------------------------------------------------------
 # Shared Ops Runtime Stage (Docker repair helpers)
@@ -168,11 +123,13 @@ ENTRYPOINT ["python3", "ops/minerops.py", "--loop"]
 # Dashboard Runtime Stage (Go UI with private Redis live state)
 # ----------------------------------------------------------------------------
 FROM ubuntu:24.04 AS dashboard
+ARG DASHBOARD_BINARY=dashboard
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates tzdata curl redis-server redis-tools \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=dashboard-build /out/dashboard /usr/local/bin/dashboard
+RUN case "$DASHBOARD_BINARY" in dashboard|node-dashboard) ;; *) echo "ERROR: unsupported DASHBOARD_BINARY=$DASHBOARD_BINARY"; exit 1 ;; esac
+COPY bin/${DASHBOARD_BINARY} /usr/local/bin/dashboard
 COPY docker/dashboard-redis.conf /etc/redis/redis.conf
 RUN chmod +x /usr/local/bin/dashboard \
  && mkdir -p /run/dashboard-redis /var/lib/dashboard-redis /app/redis/functions \

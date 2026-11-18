@@ -5296,11 +5296,14 @@ def collect_pool_job_state_summary(containers: dict[str, dict[str, Any]] | None 
     clients: list[dict[str, Any]] = []
     statuses: list[str] = []
     reasons: list[str] = []
+    running_pool_containers = 0
+    reporting_pool_containers = 0
     generated_at = now_iso()
     for name in POOL_CONTAINERS:
         info = containers.get(name) if isinstance(containers, dict) else None
         if not isinstance(info, dict) or not info.get("running"):
             continue
+        running_pool_containers += 1
         endpoint, _endpoint_error = pool_metrics_endpoint_for_container(name, info)
         if not endpoint:
             continue
@@ -5314,6 +5317,7 @@ def collect_pool_job_state_summary(containers: dict[str, dict[str, Any]] | None 
             continue
         if not isinstance(payload, dict):
             continue
+        reporting_pool_containers += 1
         statuses.append(str(payload.get("status") or "unknown"))
         reasons.append(str(payload.get("reason_code") or ""))
         for key in totals:
@@ -5343,6 +5347,8 @@ def collect_pool_job_state_summary(containers: dict[str, dict[str, Any]] | None 
         "generated_at": generated_at,
         "status": status,
         "reason_code": reason,
+        "running_pool_containers": running_pool_containers,
+        "reporting_pool_containers": reporting_pool_containers,
         **totals,
         "clients": clients,
         "source": "pool-health-job-state",

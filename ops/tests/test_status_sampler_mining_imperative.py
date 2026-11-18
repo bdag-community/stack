@@ -16,6 +16,43 @@ import status_sampler  # noqa: E402
 
 
 class StatusSamplerMiningImperativeTests(unittest.TestCase):
+    def test_uses_generated_public_wallet_when_address_is_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            status_sampler.PROJECT_ROOT = root
+            os.environ["POOL_REWARD_RUNTIME_DIR"] = "./pool-runtime"
+            runtime = root / "pool-runtime"
+            runtime.mkdir()
+            address = "0x1111111111111111111111111111111111111111"
+            (runtime / "wallet-address").write_text(address + "\n", encoding="ascii")
+            self.assertEqual(status_sampler.configured_mining_address(), address)
+            os.environ["POOL_COINBASE_ADDRESS"] = "0x2222222222222222222222222222222222222222"
+            self.assertEqual(status_sampler.configured_mining_address(), os.environ["POOL_COINBASE_ADDRESS"])
+
+    def test_miner_demand_uses_generated_wallet_to_enable_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status_sampler.PROJECT_ROOT = pathlib.Path(tmp)
+            runtime = pathlib.Path(tmp) / "pool-runtime"
+            runtime.mkdir()
+            address = "0x1111111111111111111111111111111111111111"
+            (runtime / "wallet-address").write_text(address + "\n", encoding="ascii")
+            os.environ["POOL_REWARD_RUNTIME_DIR"] = "./pool-runtime"
+            os.environ["BDAG_ENABLE_NODE_MINING"] = "0"
+            os.environ["BDAG_NODE_SERVICES"] = "node"
+            payload = self.stopped_pool_payload(sync_status="synced", remaining_blocks=0)
+            payload["containers"][status_sampler.POOL_CONTAINER]["running"] = True
+            payload["miner_health"] = {"tracked_count": 1, "connected_count": 1, "managed_count": 1}
+            updates = {}
+            def update(key: str, value: str):
+                updates[key] = value
+                os.environ[key] = value
+                return [f"/runtime/{key}"]
+            status_sampler.set_runtime_env_value = update
+            status_sampler.run = lambda command, timeout=20: self.command_result(command)
+            result = status_sampler.mining_imperative_repair(payload)
+            self.assertIn("enabled_node_mining_template_support", result["actions"])
+            self.assertIn(f"--miningaddr={address}", updates["BDAG_NODE_MINING_ARGS"])
+
     def setUp(self) -> None:
         self.originals = {
             name: getattr(status_sampler, name)

@@ -146,6 +146,25 @@ def assert_required_hooks(errors: list[str], root: Path) -> None:
                 errors.append(f"{rel_path}: missing stack-defaults hook {needle!r}")
 
 
+def assert_wallet_template_empty(errors: list[str], root: Path) -> None:
+    path = root / ".env.example"
+    if not path.exists():
+        errors.append("missing .env.example wallet template")
+        return
+    try:
+        values = parse_env_file(path)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return
+    for key in ("MINING_POOL_ADDRESS", "POOL_COINBASE_ADDRESS"):
+        if key not in values:
+            errors.append(f".env.example: missing {key}")
+    for key in ("MINING_POOL_ADDRESS", "POOL_COINBASE_ADDRESS", "MINING_ADDRESS", "POOL_PRIVATE_KEY"):
+        if values.get(key, ""):
+            # Never print an accidental key or address from a release template.
+            errors.append(f".env.example: {key} must be empty")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", default=".", help="stack repository root")
@@ -173,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     for rel_path in ("ops/install-dashboard.sh",):
         assert_shell_defaults_match(errors=errors, defaults=defaults, root=root, rel_path=rel_path)
     assert_required_hooks(errors, root)
+    assert_wallet_template_empty(errors, root)
 
     if errors:
         for error in errors:

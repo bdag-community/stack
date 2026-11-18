@@ -31,6 +31,9 @@ need_file "$PAYLOAD_SOURCE/bin/blockdag-node"
 need_file "$PAYLOAD_SOURCE/bin/nodeworker"
 need_file "$PAYLOAD_SOURCE/bin/mining-pool"
 need_file "$PAYLOAD_SOURCE/bin/poolworker"
+need_file "$PAYLOAD_SOURCE/bin/pool-payer"
+need_file "$PAYLOAD_SOURCE/bin/pool-wallet-init"
+need_file "$PAYLOAD_SOURCE/bin/pool-schema-init"
 need_file "$PAYLOAD_SOURCE/bin/dashboard-api"
 need_file "$PAYLOAD_SOURCE/bin/dashboard"
 need_file "$PAYLOAD_SOURCE/bin/node-dashboard"
@@ -66,12 +69,15 @@ cp "$PAYLOAD_SOURCE/bin/blockdag-node" \
    "$PAYLOAD_SOURCE/bin/nodeworker" \
    "$PAYLOAD_SOURCE/bin/mining-pool" \
    "$PAYLOAD_SOURCE/bin/poolworker" \
+   "$PAYLOAD_SOURCE/bin/pool-payer" \
+   "$PAYLOAD_SOURCE/bin/pool-wallet-init" \
+   "$PAYLOAD_SOURCE/bin/pool-schema-init" \
    "$PAYLOAD_SOURCE/bin/dashboard-api" \
    "$PAYLOAD_SOURCE/bin/dashboard" \
    "$PAYLOAD_SOURCE/bin/node-dashboard" \
    "$STAGE/bin/"
-chmod +x "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard"
-sha256sum "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard" > "$STAGE/checksums.txt"
+chmod +x "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/pool-payer" "$STAGE/bin/pool-wallet-init" "$STAGE/bin/pool-schema-init" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard"
+sha256sum "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/pool-payer" "$STAGE/bin/pool-wallet-init" "$STAGE/bin/pool-schema-init" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard" > "$STAGE/checksums.txt"
 
 rsync -a --exclude='__pycache__/' --exclude='*.pyc' scripts "$STAGE/"
 rsync -a --exclude='runtime/' --exclude='runtime-*/' --exclude='__pycache__/' --exclude='*.pyc' ops "$STAGE/"

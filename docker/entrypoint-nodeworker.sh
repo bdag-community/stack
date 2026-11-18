@@ -11,6 +11,11 @@ log() {
   printf '[%s] node-entrypoint: %s\n' "$(timestamp_iso)" "$*" >&2
 }
 
+if [ -n "${POOL_WALLET_PUBLIC_FILE:-}" ]; then
+  source "$(dirname -- "$0")/pool-wallet-address.sh"
+  load_pool_wallet_address
+fi
+
 file_size_bytes() {
   local path="$1" size
   size="$(stat -c%s "$path" 2>/dev/null || printf '0')"
