@@ -20,6 +20,12 @@ If a recorded reward changes position in the DAG, its payout is held until the
 pool can verify the current chain evidence. Other eligible rewards continue to
 be processed, and each EVM reward can be claimed only once.
 
+Accounting is best effort by default. Historical disputes do not prevent
+independent blocks from being submitted. If share records are missing or
+conflicting and no ASIC owner can be determined for a verified reward, that
+reward remains with the pool operator. Known, verifiable owner credits are
+processed separately; incomplete or stale chain evidence is retried.
+
 The dashboard's Global tab shows the pool's total ASIC hashpower when fresh
 telemetry covers the pool; it labels the result as observed when telemetry is
 incomplete.
