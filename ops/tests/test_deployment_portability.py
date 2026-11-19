@@ -138,7 +138,8 @@ root 41658 41563 0 16:41 ? 00:00:00 /run/rosetta/rosetta /usr/sbin/runuser runus
         workflow = (ROOT_DIR / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         agents = (ROOT_DIR / "AGENTS.md").read_text(encoding="utf-8")
 
-        self.assertIn("BlockdagEngineering/redis-dash", workflow)
+        self.assertRegex(workflow, r"DASHBOARD_REPO:.*['\"][^'\"]+/redis-dash['\"]")
+        self.assertIn("repository: ${{ env.DASHBOARD_REPO }}", workflow)
         self.assertIn("BlockdagEngineering/node-dashboard", workflow)
         self.assertIn("verify_repo redis-dash src/dashboard/main.go", workflow)
         self.assertIn("verify_repo node-dashboard src/node-dashboard/main.go", workflow)
