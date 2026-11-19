@@ -39,6 +39,7 @@ need_file "$PAYLOAD_SOURCE/bin/dashboard"
 need_file "$PAYLOAD_SOURCE/bin/node-dashboard"
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 WORK_DIR="$(mktemp -d)"
 cleanup() {
   rm -rf "$WORK_DIR"
@@ -77,7 +78,7 @@ cp "$PAYLOAD_SOURCE/bin/blockdag-node" \
    "$PAYLOAD_SOURCE/bin/node-dashboard" \
    "$STAGE/bin/"
 chmod +x "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/pool-payer" "$STAGE/bin/pool-wallet-init" "$STAGE/bin/pool-schema-init" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard"
-sha256sum "$STAGE/bin/blockdag-node" "$STAGE/bin/nodeworker" "$STAGE/bin/mining-pool" "$STAGE/bin/poolworker" "$STAGE/bin/pool-payer" "$STAGE/bin/pool-wallet-init" "$STAGE/bin/pool-schema-init" "$STAGE/bin/dashboard-api" "$STAGE/bin/dashboard" "$STAGE/bin/node-dashboard" > "$STAGE/checksums.txt"
+(cd "$STAGE" && sha256sum bin/blockdag-node bin/nodeworker bin/mining-pool bin/poolworker bin/pool-payer bin/pool-wallet-init bin/pool-schema-init bin/dashboard-api bin/dashboard bin/node-dashboard > checksums.txt)
 
 rsync -a --exclude='__pycache__/' --exclude='*.pyc' scripts "$STAGE/"
 rsync -a --exclude='runtime/' --exclude='runtime-*/' --exclude='__pycache__/' --exclude='*.pyc' ops "$STAGE/"
@@ -86,7 +87,7 @@ python3 scripts/check-release-archive.py "$STAGE"
 rm -f "$OUT" "$OUT_SHA256"
 (cd "$WORK_DIR" && zip -qr "$OUT" "$RELEASE_ROOT")
 python3 scripts/check-release-archive.py "$OUT"
-sha256sum "$OUT" > "$OUT_SHA256"
+(cd "$OUT_DIR" && sha256sum "$(basename "$OUT")") > "$OUT_SHA256"
 
 echo "$OUT"
 echo "$OUT_SHA256"
