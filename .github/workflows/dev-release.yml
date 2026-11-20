@@ -36,6 +36,10 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
+          if [[ ! "${TARGET_RELEASE_REPO}" =~ ^bdag-community/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Release destination must be a bdag-community repository."
+            exit 1
+          fi
           if [[ "${GITHUB_REF_TYPE}" != "branch" || "${GITHUB_REF_NAME}" != "develop" ]]; then
             echo "::error::dev-release must be run manually from the develop branch."
             exit 1
