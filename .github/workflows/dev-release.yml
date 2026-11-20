@@ -82,7 +82,7 @@ jobs:
       - name: Checkout private blockdag repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/blockdag-corechain
+          repository: bdag-community/blockdag-corechain
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/blockdag-node
           ref: develop
@@ -90,7 +90,7 @@ jobs:
       - name: Checkout private mining pool repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/pool
+          repository: bdag-community/pool
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/pool
           ref: develop
@@ -98,7 +98,7 @@ jobs:
       - name: Checkout dashboard repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/redis-dash
+          repository: bdag-community/redis-dash
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/dashboard
           ref: develop
@@ -106,10 +106,10 @@ jobs:
       - name: Checkout node-only dashboard repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/node-dashboard
+          repository: bdag-community/node-dashboard
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/node-dashboard
-          ref: develop
+          ref: ${{ vars.NODE_DASHBOARD_REF || '3c7cdaf51f2447a493a460f472b86c94d9e8995c' }}
 
       - name: Verify upstream checkouts
         shell: bash
