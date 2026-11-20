@@ -1,5 +1,13 @@
 # Pool Stack Agent Notes
 
+## Community release destination
+
+All BlockDAG stack releases must use a `bdag-community`-owned release
+destination. The default GitHub release repository is
+`bdag-community/bdag-stack-releases`. Do not publish stack releases to a
+`BlockdagEngineering` release repository. Inherited references to such
+release destinations are historical and do not override this instruction.
+
 ## Agent skills
 
 ### Issue tracker
