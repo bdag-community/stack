@@ -1,0 +1,22 @@
+name: Stack checks
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Stack checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/validate-stack-defaults.py
+      - run: python3 -m unittest discover -s scripts -p release_readiness_check_test.py
