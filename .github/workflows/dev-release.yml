@@ -110,10 +110,10 @@ jobs:
       - name: Checkout node-only dashboard repo
         uses: actions/checkout@v4
         with:
-          repository: BlockdagEngineering/node-dashboard
+          repository: bdag-community/node-dashboard
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/node-dashboard
-          ref: develop
+          ref: ${{ vars.NODE_DASHBOARD_REF || '3c7cdaf51f2447a493a460f472b86c94d9e8995c' }}
 
       - name: Verify upstream checkouts
         shell: bash

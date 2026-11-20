@@ -17,15 +17,15 @@ env:
   GO_VERSION: "1.26.x"
   GOFLAGS: "-buildvcs=false"
   PACKAGE_NAME: "pool-stack-docker"
-  # All of the below are overridable per-repo via Settings > Secrets and
-  # variables > Actions > Variables (e.g. bem-amado/stack points these at its
-  # own personal mirrors while staging changes) rather than editing the
-  # literals here.
   TARGET_RELEASE_REPO: ${{ vars.BDAG_STACK_RELEASES_REPO || 'bdag-community/bdag-stack-releases' }}
-  BLOCKDAG_NODE_REPO: ${{ vars.BLOCKDAG_NODE_REPO || 'bdag-community/blockdag-corechain' }}
-  POOL_REPO: ${{ vars.POOL_REPO || 'bdag-community/pool' }}
-  DASHBOARD_REPO: ${{ vars.DASHBOARD_REPO || 'bdag-community/redis-dash' }}
-  NODE_DASHBOARD_REPO: ${{ vars.NODE_DASHBOARD_REPO || 'BlockdagEngineering/node-dashboard' }}
+  BLOCKDAG_NODE_REPO: bdag-community/blockdag-corechain
+  POOL_REPO: bdag-community/pool
+  DASHBOARD_REPO: bdag-community/redis-dash
+  NODE_DASHBOARD_REPO: bdag-community/node-dashboard
+  BLOCKDAG_NODE_REF: ${{ vars.BLOCKDAG_NODE_REF || '756d01c35f653abfc69a4d92a46f07423f58dcc9' }}
+  POOL_REF: ${{ vars.POOL_REF || 'b93b8d600b37c4b91db318b18a41b61047c57d2f' }}
+  DASHBOARD_REF: ${{ vars.DASHBOARD_REF || '2d3ade411869e10a79690d690476d5ff5478f6d9' }}
+  NODE_DASHBOARD_REF: ${{ vars.NODE_DASHBOARD_REF || '3c7cdaf51f2447a493a460f472b86c94d9e8995c' }}
 
 jobs:
   build-and-package:
@@ -69,7 +69,7 @@ jobs:
           repository: ${{ env.BLOCKDAG_NODE_REPO }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/blockdag-node
-          ref: main
+          ref: ${{ env.BLOCKDAG_NODE_REF }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -79,7 +79,7 @@ jobs:
           repository: ${{ env.POOL_REPO }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/pool
-          ref: main
+          ref: ${{ env.POOL_REF }}
 
       - name: Checkout dashboard repo
         uses: actions/checkout@v4
@@ -87,7 +87,7 @@ jobs:
           repository: ${{ env.DASHBOARD_REPO }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/dashboard
-          ref: main
+          ref: ${{ env.DASHBOARD_REF }}
 
       - name: Checkout node-only dashboard repo
         uses: actions/checkout@v4
@@ -95,7 +95,7 @@ jobs:
           repository: ${{ env.NODE_DASHBOARD_REPO }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
           path: src/node-dashboard
-          ref: main
+          ref: ${{ env.NODE_DASHBOARD_REF }}
 
       - name: Verify upstream checkouts
         shell: bash
