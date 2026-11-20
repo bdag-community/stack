@@ -76,6 +76,9 @@ jobs:
             exit 1
           }
 
+          [[ "${GITHUB_REPOSITORY}" =~ ^bdag-community/[A-Za-z0-9_.-]+$ ]] ||
+            fail 'Release destination must be a bdag-community repository.'
+
           github_api() {
             gh api \
               -H 'Accept: application/vnd.github+json' \
