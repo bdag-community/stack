@@ -1,5 +1,13 @@
 # Pool Stack Agent Notes
 
+## Community release destination
+
+All BlockDAG stack releases must use a `bdag-community`-owned release
+destination. The default GitHub release repository is
+`bdag-community/bdag-stack-releases`. Do not publish stack releases to a
+`BlockdagEngineering` release repository. Inherited references to such
+release destinations are historical and do not override this instruction.
+
 ## Agent skills
 
 ### Issue tracker
@@ -16,7 +24,7 @@ Multi-context repo with shared context in sibling `../codex-memory`; read that m
 
 ## Release Candidate Dashboard Source
 
-`BlockdagEngineering/stack` is now the authoritative stack repository for this
+`bdag-community/stack` is the authoritative stack repository for this
 line. `BlockdagEngineering/stack-redis` is retired as a runtime target; use it
 only as historical donor material when intentionally merging useful scripts,
 defaults, or docs into this repo. Do not instruct humans or agents to build the
@@ -24,22 +32,22 @@ production stack from `stack-redis`.
 
 Release and source installs for this line build from:
 
-- `BlockdagEngineering/stack`
-- `BlockdagEngineering/blockdag-corechain`
-- `BlockdagEngineering/pool`
-- `BlockdagEngineering/redis-dash`
-- `BlockdagEngineering/node-dashboard` for the node-only dashboard binary
+- `bdag-community/stack`
+- `bdag-community/blockdag-corechain`
+- `bdag-community/pool`
+- `bdag-community/redis-dash`
+- `bdag-community/node-dashboard` for the node-only dashboard binary
 
 Do not add release workflow checkouts, compose services, build contexts,
 installers, or docs that depend on collector, dashboard2, old dashboard repos,
 CPU miner, or GPU miner.
 
 The dashboard repository for the redis dashboard release line is
-`BlockdagEngineering/redis-dash`. Release builds for this line must build from
+`bdag-community/redis-dash`. Release builds for this line must build from
 the checked-out `redis-dash` source context, not an older `dashboard2` checkout
 or a cached Docker image. During upgrades, verify the image provenance and the
 running dashboard layout before reporting the dashboard redeployed.
-Node-only installs use the separate `BlockdagEngineering/node-dashboard`
+Node-only installs use the separate `bdag-community/node-dashboard`
 source for the `node-dashboard` binary when the user selects the standalone
 node stack.
 
