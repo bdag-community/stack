@@ -22,7 +22,7 @@ env:
   POOL_REPO: bdag-community/pool
   DASHBOARD_REPO: bdag-community/redis-dash
   NODE_DASHBOARD_REPO: bdag-community/node-dashboard
-  BLOCKDAG_NODE_REF: ${{ vars.BLOCKDAG_NODE_REF || '756d01c35f653abfc69a4d92a46f07423f58dcc9' }}
+  BLOCKDAG_NODE_REF: ${{ vars.BLOCKDAG_NODE_REF || '2cc70ffd84eb45a716862b28f95f6fa4b6add632' }}
   POOL_REF: ${{ vars.POOL_REF || 'b93b8d600b37c4b91db318b18a41b61047c57d2f' }}
   DASHBOARD_REF: ${{ vars.DASHBOARD_REF || '2d3ade411869e10a79690d690476d5ff5478f6d9' }}
   NODE_DASHBOARD_REF: ${{ vars.NODE_DASHBOARD_REF || '3c7cdaf51f2447a493a460f472b86c94d9e8995c' }}
